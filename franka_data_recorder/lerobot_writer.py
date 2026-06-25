@@ -33,14 +33,18 @@ class LeRobotWriter:
         self._log = logger
         LeRobotDataset = _import_lerobot_dataset()
 
-        # build the LeRobot feature schema from our config-derived metadata
+        # build the LeRobot feature schema from our config-derived metadata.
+        # NOTE: shape MUST be a tuple, not a list. lerobot's per-frame validator compares
+        # `value.shape` (always a numpy tuple, e.g. (7,)) against `feature["shape"]` with a
+        # plain `!=`; a list [7] never equals the tuple (7,), so every frame would be
+        # rejected ("does not have the expected shape").
         ds_features = {}
         for name, meta in features.items():
             if meta['dtype'] == 'video':
-                ds_features[name] = {'dtype': 'video', 'shape': list(meta['shape']),
+                ds_features[name] = {'dtype': 'video', 'shape': tuple(meta['shape']),
                                      'names': ['height', 'width', 'channels']}
             else:
-                ds_features[name] = {'dtype': 'float32', 'shape': list(meta['shape']),
+                ds_features[name] = {'dtype': 'float32', 'shape': tuple(meta['shape']),
                                      'names': None}
 
         # Always CREATE a fresh local dataset. (Re-opening an existing one via
