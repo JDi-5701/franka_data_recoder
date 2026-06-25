@@ -156,15 +156,18 @@ class RecorderNode(Node):
     def _tick(self):
         if not self._recording:
             return
-        frame = self._build_frame()
-        if frame is None:
-            self._skipped += 1
-            if self._skipped % int(self.fps) == 1:
-                self.get_logger().warn('waiting for all configured topics to publish...')
-            return
-        frame['task'] = self._task
-        self._writer.add_frame(frame)
-        self._n_frames += 1
+        try:
+            frame = self._build_frame()
+            if frame is None:
+                self._skipped += 1
+                if self._skipped % int(self.fps) == 1:
+                    self.get_logger().warn('waiting for all configured topics to publish...')
+                return
+            frame['task'] = self._task
+            self._writer.add_frame(frame)
+            self._n_frames += 1
+        except Exception as e:  # noqa - never let one bad frame kill the node
+            self.get_logger().error(f'record frame failed: {e}', throttle_duration_sec=2.0)
 
     # ---- services -------------------------------------------------------
     def _ensure_writer(self):
