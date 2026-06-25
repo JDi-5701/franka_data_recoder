@@ -12,6 +12,7 @@ yet show "waiting...".
 
 Run (conda ros_ml): ros2 run franka_data_recorder gui   ->  http://localhost:8088
 """
+import glob
 import json
 import os
 import threading
@@ -128,9 +129,12 @@ class GuiNode(Node):
         return {f['topic']: self._state.get(f['topic']) for f in self.fields}
 
     def dataset(self):
-        info = {'root': self.ds_root, 'exists': False, 'episodes': 0, 'frames': 0, 'fps': None}
+        # The recorder writes to a per-run timestamped dir <ds_root>_<stamp>; show the most
+        # recent one that actually has a dataset in it. Fall back to ds_root itself.
+        root = self._latest_dataset_dir()
+        info = {'root': root, 'exists': False, 'episodes': 0, 'frames': 0, 'fps': None}
         try:
-            p = os.path.join(self.ds_root, 'meta', 'info.json')
+            p = os.path.join(root, 'meta', 'info.json')
             if os.path.exists(p):
                 with open(p) as f:
                     j = json.load(f)
@@ -139,6 +143,12 @@ class GuiNode(Node):
         except Exception:  # noqa
             pass
         return info
+
+    def _latest_dataset_dir(self):
+        # timestamp suffix sorts lexically, so the max glob match is the newest run
+        candidates = [d for d in glob.glob(self.ds_root + '_*')
+                      if os.path.exists(os.path.join(d, 'meta', 'info.json'))]
+        return max(candidates) if candidates else self.ds_root
 
 
 PAGE = r"""<!doctype html><html><head><meta charset="utf-8"><title>Franka Recorder</title>

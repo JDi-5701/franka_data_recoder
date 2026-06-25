@@ -15,6 +15,7 @@ Params:
 """
 import importlib
 import os
+from datetime import datetime
 
 import numpy as np
 import yaml
@@ -56,14 +57,36 @@ def _resolve_type(type_str):
     return getattr(importlib.import_module(mod_name), cls)
 
 
+def _source_repo_dir(cfg_path):
+    """Directory that relative dataset roots anchor to: the package *source* repo (config
+    lives in <repo>/config/, so repo = parent of the config dir).
+
+    When the package is run from a colcon install space the config is a copy at
+    <ws>/install/<pkg>/share/<pkg>/config/...; recordings would land in throwaway install
+    space (wiped by `colcon build`). Redirect to the source checkout under <ws>/src so data
+    stays in the real repo. With `--symlink-install` realpath already points at source and
+    this is a no-op."""
+    real = os.path.realpath(cfg_path)
+    repo = os.path.dirname(os.path.dirname(real))          # <...>/config/x.yaml -> <...>
+    parts = repo.split(os.sep)
+    if 'install' in parts:
+        ws = os.sep.join(parts[:parts.index('install')]) or os.sep
+        src = os.path.join(ws, 'src')
+        if os.path.isdir(src):
+            for dirpath, _dirs, _files in os.walk(src):
+                if os.path.basename(dirpath) == 'franka_data_recorder' \
+                        and os.path.isdir(os.path.join(dirpath, 'config')):
+                    return dirpath
+    return repo
+
+
 def resolve_data_root(root, cfg_path):
-    """Relative dataset roots resolve to <repo>/<root> (config lives in <repo>/config/),
-    so recorded data stays inside the package folder (git-ignored). Absolute paths/~ kept."""
+    """Relative dataset roots resolve to <source-repo>/<root> (git-ignored), so recordings
+    stay inside the package folder and survive `colcon build`. Absolute paths/~ kept."""
     root = os.path.expanduser(str(root or 'data/dataset'))
     if os.path.isabs(root):
         return root
-    repo = os.path.dirname(os.path.dirname(os.path.realpath(cfg_path)))
-    return os.path.join(repo, root)
+    return os.path.join(_source_repo_dir(cfg_path), root)
 
 
 class _Source:
@@ -122,9 +145,14 @@ class RecorderNode(Node):
                     lambda m, t=src.topic: self._latest.__setitem__(t, m), qos)
                 self.get_logger().info(f'subscribed {src.topic} ({src.type_str})')
 
-        # lazy writer (created on first start so a missing lerobot fails loudly only then)
+        # lazy writer (created on first start so a missing lerobot fails loudly only then).
+        # Each process run gets its own timestamped dataset dir so a restart never collides
+        # with an existing one (cross-restart append is a separate TODO). Episodes recorded
+        # within one run still accumulate into this single dataset.
         self._ds_cfg = dict(ds)
-        self._ds_cfg['root'] = resolve_data_root(ds.get('root'), cfg_path)
+        base_root = resolve_data_root(ds.get('root'), cfg_path)
+        stamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+        self._ds_cfg['root'] = f'{base_root}_{stamp}'
         self.get_logger().info(f"dataset root: {self._ds_cfg['root']}")
         self._writer = None
         self._recording = False
