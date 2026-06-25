@@ -270,3 +270,44 @@ Buttons: **Start / Stop / Discard** call the record services; **Reset robot** ca
 4. Web GUI: rosbridge/Foxglove page — visualize state+images, buttons for reset/record.
 5. Add a camera; record `observation.images.*`; first π0.5 fine-tune smoke test.
 6. Add depth / extra cameras for world-model (JEPA/Cosmos) compatibility.
+
+---
+
+## 12. Adaptivity — what's config-driven today, and what's not (TODO)
+
+### ✅ What adapts right now (edit `recorder.yaml`, no code change)
+The recorder, the GUI dashboard, and the data player are all built dynamically from the
+`features:` block of the config — so the same package handles very different robot setups by
+config alone:
+
+| Scenario | How |
+|---|---|
+| **Multiple robots** | namespace the topics (`/robot1/...`, `/robot2/...`) and add each as a feature/source |
+| **Custom topic** | add one `{topic, type, extractor, dim}` line under a feature (or in a `concat`) |
+| **Joint-only vs TCP-only** | keep a separate config per setup; list only the sources that setup publishes |
+| **Multiple cameras** | add several `observation.images.<name>` features → GUI shows N panels automatically |
+| **Naming a run** | `dataset_name:=<task>` → `data/<task>_<timestamp>/` (folder + repo_id) |
+
+The **GUI** reads the same config and adapts its camera panels + curve plots; the **player**
+lists every dataset under `data/` and replays a chosen episode through those same panels.
+
+### ⚠️ Current limits (carry these as TODO)
+1. **Cross-config replay is not self-describing.** The player slices a recorded feature
+   vector (e.g. `observation.state`, 22-dim) back onto per-topic curves using the **config the
+   GUI was launched with** — *not* the dataset's own schema. Replaying a dataset recorded under
+   a *different* config (different dims / topics / camera count) than the running GUI will
+   mis-slice or mismatch. Root cause: LeRobot `meta/info.json` stores feature names + shapes
+   but **not** our `concat → topic` breakdown.
+   **TODO:** write the topic/concat mapping into the dataset at record time (a sidecar next to
+   `meta/`), and have the player rebuild panels + slicing per-dataset from *its own* schema, so
+   any dataset replays correctly regardless of the GUI's launch config.
+2. **All configured sources are mandatory.** `_build_frame` drops a frame until *every* listed
+   topic has published, so one config cannot "record whatever happens to be live" — joint-only
+   vs tcp-only is handled by swapping configs, not auto-detection.
+   **TODO:** an `optional: true` flag per source — skip a missing optional source instead of
+   dropping the whole frame, so one config can adapt to "joints if present, TCP if present".
+3. **Novel message types need code.** Known types (PoseStamped / JointState / WrenchStamped /
+   Image …) work from config; a brand-new message type needs a small extractor in
+   `extractors.py` + a `_TYPE_MAP` entry.
+   **TODO:** document the extractor-plugin pattern (and ship ready-made multi-arm / multi-cam /
+   joint-only / tcp-only example configs).
