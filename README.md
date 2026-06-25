@@ -215,6 +215,11 @@ source install/setup.bash
 # run (edit config/recorder.yaml first: dataset root, repo_id)
 ros2 launch franka_data_recorder recorder.launch.py task:="pick up the cube"
 
+# name the output folder by task (-> data/pick_cube_<timestamp>/). task = language label,
+# dataset_name = folder/repo_id base. Each run still gets a fresh timestamped dir.
+ros2 launch franka_data_recorder recorder.launch.py task:="pick up the cube" dataset_name:=pick_cube
+#   or on a bare node:  ros2 run franka_data_recorder recorder --ros-args -p dataset_name:=pick_cube
+
 # control it (CLI now; GUI/button later call the same services)
 ros2 service call /franka_data_recorder/start_recording std_srvs/srv/Trigger
 ros2 service call /franka_data_recorder/stop_recording  std_srvs/srv/Trigger

@@ -89,6 +89,12 @@ def resolve_data_root(root, cfg_path):
     return os.path.join(_source_repo_dir(cfg_path), root)
 
 
+def _slug(name):
+    """Filesystem-safe folder name from a free-text run/task name (spaces -> _)."""
+    keep = [(c if (c.isalnum() or c in '-_') else '_') for c in str(name).strip()]
+    return ''.join(keep).strip('_') or 'dataset'
+
+
 class _Source:
     __slots__ = ('topic', 'type_str', 'extractor')
 
@@ -149,8 +155,16 @@ class RecorderNode(Node):
         # Each process run gets its own timestamped dataset dir so a restart never collides
         # with an existing one (cross-restart append is a separate TODO). Episodes recorded
         # within one run still accumulate into this single dataset.
+        #
+        # `dataset_name` param overrides the folder/repo_id base (e.g. a task name like
+        # "pick_cube") -> data/<dataset_name>_<timestamp>; otherwise the config root is used.
         self._ds_cfg = dict(ds)
         base_root = resolve_data_root(ds.get('root'), cfg_path)
+        run_name = (self.declare_parameter('dataset_name', '').value or '').strip()
+        if run_name:
+            run_name = _slug(run_name)
+            base_root = os.path.join(os.path.dirname(base_root), run_name)
+            self._ds_cfg['repo_id'] = run_name
         stamp = datetime.now().strftime('%Y%m%d_%H%M%S')
         self._ds_cfg['root'] = f'{base_root}_{stamp}'
         self.get_logger().info(f"dataset root: {self._ds_cfg['root']}")
