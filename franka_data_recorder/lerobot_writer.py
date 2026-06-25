@@ -4,6 +4,13 @@ This is the ONLY file that talks to the `lerobot` library. If your installed ler
 different API (import path / add_frame / save_episode signature), adjust it here only.
 Tested against the lerobot 0.x `LeRobotDataset` API.
 """
+import os
+
+# Record locally without any HuggingFace Hub access (else LeRobotDataset.create tries to
+# fetch the repo refs and 401s for a local-only dataset). Set BEFORE importing lerobot.
+os.environ.setdefault("HF_HUB_OFFLINE", "1")
+os.environ.setdefault("HF_DATASETS_OFFLINE", "1")
+
 import numpy as np
 
 
