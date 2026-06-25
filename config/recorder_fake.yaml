@@ -6,7 +6,7 @@
 
 dataset:
   repo_id: fake_test
-  root: /home/prs/lerobot_data/fake_test
+  root: data/fake_test            # RELATIVE -> <repo>/data/ (git-ignored)
   fps: 30
   robot_type: franka_fr3
 

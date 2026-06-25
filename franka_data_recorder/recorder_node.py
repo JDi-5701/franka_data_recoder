@@ -56,6 +56,16 @@ def _resolve_type(type_str):
     return getattr(importlib.import_module(mod_name), cls)
 
 
+def resolve_data_root(root, cfg_path):
+    """Relative dataset roots resolve to <repo>/<root> (config lives in <repo>/config/),
+    so recorded data stays inside the package folder (git-ignored). Absolute paths/~ kept."""
+    root = os.path.expanduser(str(root or 'data/dataset'))
+    if os.path.isabs(root):
+        return root
+    repo = os.path.dirname(os.path.dirname(os.path.realpath(cfg_path)))
+    return os.path.join(repo, root)
+
+
 class _Source:
     __slots__ = ('topic', 'type_str', 'extractor')
 
@@ -113,7 +123,9 @@ class RecorderNode(Node):
                 self.get_logger().info(f'subscribed {src.topic} ({src.type_str})')
 
         # lazy writer (created on first start so a missing lerobot fails loudly only then)
-        self._ds_cfg = ds
+        self._ds_cfg = dict(ds)
+        self._ds_cfg['root'] = resolve_data_root(ds.get('root'), cfg_path)
+        self.get_logger().info(f"dataset root: {self._ds_cfg['root']}")
         self._writer = None
         self._recording = False
         self._n_frames = 0

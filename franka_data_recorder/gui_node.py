@@ -29,7 +29,7 @@ from std_srvs.srv import Trigger
 from ament_index_python.packages import get_package_share_directory
 
 from .extractors import get_extractor
-from .recorder_node import _resolve_type
+from .recorder_node import _resolve_type, resolve_data_root
 
 ACTIONS = {'start': 'start_recording', 'stop': 'stop_recording',
            'discard': 'discard_episode', 'reset': 'reset'}
@@ -49,7 +49,7 @@ class GuiNode(Node):
         self.port = int(self.declare_parameter('port', 8088).value)
         with open(cfg_path) as f:
             cfg = yaml.safe_load(f)
-        self.ds_root = (cfg.get('dataset') or {}).get('root')
+        self.ds_root = resolve_data_root((cfg.get('dataset') or {}).get('root'), cfg_path)
 
         self.cams = []     # [{id, topic, label}]
         self.fields = []   # [{topic, label}]

@@ -5,7 +5,7 @@
 
 dataset:
   repo_id: franka_demo            # LeRobot dataset name
-  root: /home/prs/lerobot_data/franka_demo   # where the dataset is written (on the GPU PC)
+  root: data/franka_demo          # RELATIVE -> resolved to <repo>/data/ (git-ignored). Absolute paths also allowed.
   fps: 30                         # dataset rate; topics are resampled (latest-sample) to this
   robot_type: franka_fr3
 
