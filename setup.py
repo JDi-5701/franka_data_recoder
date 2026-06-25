@@ -25,6 +25,7 @@ setup(
         'console_scripts': [
             'recorder = franka_data_recorder.recorder_node:main',
             'gui = franka_data_recorder.gui_node:main',
+            'fake = franka_data_recorder.fake_publisher:main',
         ],
     },
 )

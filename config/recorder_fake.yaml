@@ -1,0 +1,30 @@
+# Full-streams config for testing with the fake publisher (`ros2 run franka_data_recorder fake`).
+# Includes streams the real controller does not publish yet (arm joints, camera) so the GUI
+# dashboard can be seen complete. Point the recorder/GUI at this file with:
+#   ros2 run franka_data_recorder gui      --ros-args -p config_file:=<...>/recorder_fake.yaml
+#   ros2 run franka_data_recorder recorder --ros-args -p config_file:=<...>/recorder_fake.yaml
+
+dataset:
+  repo_id: fake_test
+  root: /home/prs/lerobot_data/fake_test
+  fps: 30
+  robot_type: franka_fr3
+
+task:
+  default: "fake data test"
+
+features:
+  observation.images.wrist:
+    topic: /camera/wrist/color/image_raw
+    type: Image
+    extractor: image_rgb
+    shape: [240, 320, 3]
+  observation.state:
+    concat:
+      - {topic: /cartesian_impedance_node/current_pose, type: PoseStamped, extractor: pose_7d,        dim: 7}
+      - {topic: /franka/joint_states,                   type: JointState,  extractor: jointstate_pos, dim: 7}
+      - {topic: /cartesian_impedance_node/ext_wrench,   type: WrenchStamped, extractor: wrench_6d,    dim: 6}
+      - {topic: /franka_gripper/joint_states,           type: JointState,  extractor: jointstate_pos, dim: 2}
+  action:
+    concat:
+      - {topic: /cartesian_impedance_node/target_pose,  type: PoseStamped, extractor: pose_7d,        dim: 7}
