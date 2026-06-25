@@ -1,0 +1,24 @@
+<?xml version="1.0"?>
+<?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
+<package format="3">
+  <name>franka_data_recorder</name>
+  <version>0.0.1</version>
+  <description>Record Franka teleop episodes into the LeRobot dataset format (for pi0.5 / world-model training). Config-driven and extensible.</description>
+  <maintainer email="jding@uni-bremen.de">Junsheng Ding</maintainer>
+  <maintainer email="ding@fortiss.de">Junsheng Ding</maintainer>
+  <author email="jding@uni-bremen.de">Junsheng Ding</author>
+  <license>Apache-2.0</license>
+
+  <exec_depend>rclpy</exec_depend>
+  <exec_depend>std_msgs</exec_depend>
+  <exec_depend>std_srvs</exec_depend>
+  <exec_depend>geometry_msgs</exec_depend>
+  <exec_depend>sensor_msgs</exec_depend>
+  <exec_depend>franka_cartesian_impedance_node</exec_depend>
+  <!-- optional, only when recording camera images: cv_bridge -->
+  <!-- python deps not in rosdep: lerobot, numpy (pip install) -->
+
+  <export>
+    <build_type>ament_python</build_type>
+  </export>
+</package>

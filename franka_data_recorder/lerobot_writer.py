@@ -1,0 +1,84 @@
+"""LeRobot dataset writer (isolated so the rest of the recorder is lerobot-version agnostic).
+
+This is the ONLY file that talks to the `lerobot` library. If your installed lerobot has a
+different API (import path / add_frame / save_episode signature), adjust it here only.
+Tested against the lerobot 0.x `LeRobotDataset` API.
+"""
+import numpy as np
+
+
+def _import_lerobot_dataset():
+    # the import path moved between lerobot versions; try both
+    for path in ('lerobot.datasets.lerobot_dataset',
+                 'lerobot.common.datasets.lerobot_dataset'):
+        try:
+            mod = __import__(path, fromlist=['LeRobotDataset'])
+            return mod.LeRobotDataset
+        except Exception:  # noqa
+            continue
+    raise ImportError(
+        "could not import LeRobotDataset. Install lerobot in the recorder's python env:\n"
+        "  pip install lerobot   (or: pip install 'lerobot[pi0]')")
+
+
+class LeRobotWriter:
+    def __init__(self, repo_id, root, fps, robot_type, features, logger=None):
+        self._log = logger
+        LeRobotDataset = _import_lerobot_dataset()
+
+        # build the LeRobot feature schema from our config-derived metadata
+        ds_features = {}
+        for name, meta in features.items():
+            if meta['dtype'] == 'video':
+                ds_features[name] = {'dtype': 'video', 'shape': list(meta['shape']),
+                                     'names': ['height', 'width', 'channels']}
+            else:
+                ds_features[name] = {'dtype': 'float32', 'shape': list(meta['shape']),
+                                     'names': None}
+
+        import os
+        if os.path.exists(os.path.join(str(root), 'meta', 'info.json')):
+            # append to an existing dataset
+            self.ds = LeRobotDataset(repo_id, root=root)
+            self._info('opened existing LeRobot dataset at %s' % root)
+        else:
+            self.ds = LeRobotDataset.create(
+                repo_id=repo_id, fps=int(fps), root=root, robot_type=robot_type,
+                features=ds_features, use_videos=True)
+            self._info('created LeRobot dataset at %s' % root)
+        self._task = None
+
+    def _info(self, m):
+        if self._log:
+            self._log.info(m)
+
+    def start_episode(self, task):
+        self._task = task
+
+    def add_frame(self, frame):
+        # frame already contains feature arrays + 'task'; ensure float32 for low-dim
+        out = {}
+        for k, v in frame.items():
+            if k == 'task':
+                out[k] = v
+            elif isinstance(v, np.ndarray) and v.dtype != np.uint8:
+                out[k] = v.astype(np.float32)
+            else:
+                out[k] = v
+        try:
+            self.ds.add_frame(out)                     # newer API: task inside the frame
+        except TypeError:
+            task = out.pop('task', self._task)
+            self.ds.add_frame(out, task=task)          # older API: task kwarg
+
+    def save_episode(self):
+        try:
+            self.ds.save_episode()
+        except TypeError:
+            self.ds.save_episode(task=self._task)      # older API wanted task here
+
+    def discard_episode(self):
+        for attr in ('clear_episode_buffer', 'clear_episode'):
+            if hasattr(self.ds, attr):
+                getattr(self.ds, attr)()
+                return

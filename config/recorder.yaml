@@ -1,0 +1,47 @@
+# franka_data_recorder configuration.
+# Edit this file to change WHAT gets recorded — no code changes needed.
+# Each feature maps to a LeRobot key; `concat` builds one vector from several topics.
+# `dim` (low-dim) or `shape` (images) must be given so the dataset schema is known up front.
+
+dataset:
+  repo_id: franka_demo            # LeRobot dataset name
+  root: /home/prs/lerobot_data/franka_demo   # where the dataset is written (on the GPU PC)
+  fps: 30                         # dataset rate; topics are resampled (latest-sample) to this
+  robot_type: franka_fr3
+
+task:
+  default: "franka teleop demonstration"   # language instruction; override with the 'task' param
+
+# Reset / go-home between episodes. The recorder's ~/reset service drives the robot to this
+# pose via the controller's go_home service (NO topic conflict with teleop), then pokes
+# /reset_teleop so teleop re-latches. Configure a per-task home pose here.
+reset:
+  go_home_service: /cartesian_impedance_node/go_home
+  reset_teleop_topic: /reset_teleop
+  max_velocity: 0.08            # m/s during homing (<=0 -> controller default)
+  pose:                         # TCP pose in the base frame
+    position: [0.4, 0.0, 0.4]
+    orientation: [1.0, 0.0, 0.0, 0.0]   # [x, y, z, w]  (TCP pointing down, typical Franka)
+
+features:
+  # --- proprioception + force -> observation.state -------------------------------
+  observation.state:
+    concat:
+      - {topic: /cartesian_impedance_node/current_pose, type: PoseStamped,   extractor: pose_7d,        dim: 7}
+      - {topic: /cartesian_impedance_node/ext_wrench,    type: WrenchStamped, extractor: wrench_6d,      dim: 6}
+      - {topic: /franka_gripper/joint_states,            type: JointState,    extractor: jointstate_pos, dim: 2}
+  # --- commanded action ----------------------------------------------------------
+  action:
+    concat:
+      - {topic: /cartesian_impedance_node/target_pose,   type: PoseStamped,   extractor: pose_7d,        dim: 7}
+
+  # --- cameras (uncomment once a camera is connected; needs cv_bridge) ------------
+  # observation.images.wrist:
+  #   topic: /camera/wrist/color/image_raw
+  #   type: Image
+  #   extractor: image_rgb
+  #   shape: [480, 640, 3]
+
+  # --- arm joints (uncomment once cartesian_impedance_node publishes joint_states) -
+  # observation.state already concatenates; to add 7-dof arm q, insert a source:
+  #   - {topic: /franka/joint_states, type: JointState, extractor: jointstate_pos, dim: 7}
