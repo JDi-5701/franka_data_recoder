@@ -43,16 +43,19 @@ class LeRobotWriter:
                 ds_features[name] = {'dtype': 'float32', 'shape': list(meta['shape']),
                                      'names': None}
 
-        import os
-        if os.path.exists(os.path.join(str(root), 'meta', 'info.json')):
-            # append to an existing dataset
-            self.ds = LeRobotDataset(repo_id, root=root)
-            self._info('opened existing LeRobot dataset at %s' % root)
-        else:
-            self.ds = LeRobotDataset.create(
-                repo_id=repo_id, fps=int(fps), root=root, robot_type=robot_type,
-                features=ds_features, use_videos=True)
-            self._info('created LeRobot dataset at %s' % root)
+        # Always CREATE a fresh local dataset. (Re-opening an existing one via
+        # LeRobotDataset(repo_id, root) makes lerobot query the HF Hub for the dataset
+        # version -> 401/offline for a local-only dataset. Appending across recorder
+        # restarts needs a Hub-free local load -- TODO.)
+        root_str = str(root)
+        if os.path.exists(os.path.join(root_str, 'meta', 'info.json')):
+            raise RuntimeError(
+                f"a dataset already exists at {root_str}. Delete it (rm -rf) or change "
+                f"dataset.root / repo_id to record a fresh one. Cross-restart append is TODO.")
+        self.ds = LeRobotDataset.create(
+            repo_id=repo_id, fps=int(fps), root=root, robot_type=robot_type,
+            features=ds_features, use_videos=True)
+        self._info('created LeRobot dataset at %s' % root)
         self._task = None
 
     def _info(self, m):
