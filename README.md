@@ -168,10 +168,16 @@ services. This avoids fighting the teleop stream.
  (or policy)        ├─► /cartesian_impedance_node/target_pose ─► robot   (ONE active driver)
                     │
  Web GUI ───────────┼─► (service) recorder ~/go_home / ~/go_pose  ─► controller homing, ignores target_pose
-                    ├─► (topic)   /reset_teleop                    re-latch teleop equilibrium after homing
                     └─► (service) recorder ~/start_recording / ~/stop_recording / ~/discard_episode
- Web GUI  ◄──────────── subscribes current_pose / ext_wrench / images / joint_states  (visualize)
+ Web GUI  ◄──────────── subscribes current_pose / ext_wrench / images / joint_states / control_state  (visualize)
 ```
+
+**The controller OWNS robot behavior + the lock.** It runs a TOPIC/HOMING/GUARD state machine
+and publishes its mode on `~/control_state` (`franka_cartesian_impedance_msgs/ControlState`).
+After a homing it sits in GUARD (ignoring `target_pose`) until an incoming target comes within a
+tolerance of the current pose, then resumes TOPIC — safe hand-over with **no external lock** (no
+`/reset_teleop`). Teleop respects `~/control_state` (re-anchors while not TOPIC); the GUI just
+displays it.
 
 - **Homing = services ON the controller** (`cartesian_impedance_node`) — IMPLEMENTED:
   `~/go_home` (`std_srvs/Trigger` → the controller's own fixed `home_pose` param, no pose in
@@ -179,11 +185,10 @@ services. This avoids fighting the teleop stream.
   pose). Both creep the controller's own equilibrium at a slow cap and **ignore `target_pose`
   while homing** → single owner, no conflict; block until reached.
 - **`~/go_home` and `~/go_pose` on this recorder** — IMPLEMENTED: thin forwarders so the GUI
-  stays a pure Trigger client. `~/go_home` forwards to the controller's `~/go_home`;
-  `~/go_pose` calls the controller's `~/go_pose` with the pose from `config/recorder.yaml`
-  (`go_pose:` section). Both then publish `/reset_teleop` so `teleop_interface` re-latches its
-  equilibrium to the new pose (else it yanks the arm back) and resumes. The GUI never publishes
-  poses. (There is no `~/reset` anymore — use `~/go_home` / `~/go_pose`.)
+  stays a pure Trigger client. `~/go_home` forwards to the controller's `~/go_home`; `~/go_pose`
+  calls the controller's `~/go_pose` with the pose from `config/recorder.yaml` (`go_pose:`
+  section). No teleop coordination here — the controller's GUARD handles the hand-over. (There
+  is no `~/reset` anymore — use `~/go_home` / `~/go_pose`.)
 - **Record control = services on this recorder** (see §10).
 - The GUI is a thin web client (self-contained web page) that subscribes for visualization and
   calls these services for control.
@@ -227,8 +232,8 @@ ros2 launch franka_data_recorder recorder.launch.py task:="pick up the cube" dat
 ros2 service call /franka_data_recorder/start_recording std_srvs/srv/Trigger
 ros2 service call /franka_data_recorder/stop_recording  std_srvs/srv/Trigger
 ros2 service call /franka_data_recorder/discard_episode std_srvs/srv/Trigger
-ros2 service call /franka_data_recorder/go_home         std_srvs/srv/Trigger   # controller's fixed home_pose + re-latch teleop
-ros2 service call /franka_data_recorder/go_pose         std_srvs/srv/Trigger   # config go_pose.pose + re-latch teleop
+ros2 service call /franka_data_recorder/go_home         std_srvs/srv/Trigger   # -> controller's fixed home_pose
+ros2 service call /franka_data_recorder/go_pose         std_srvs/srv/Trigger   # -> config go_pose.pose
 ```
 
 `~/go_home` drives to the controller's OWN fixed `home_pose` (no pose param). `~/go_pose`
@@ -265,7 +270,10 @@ View it:
   ```
 Buttons: **Start / Stop / Discard** call the record services; **Go Home** calls `~/go_home`
 (controller's fixed home_pose) and **Go Pose** calls `~/go_pose` (the `go_pose:` pose in the
-config) — both re-latch teleop afterwards. The page also shows live state + camera views.
+config). A big colored banner shows the controller's `~/control_state` (TOPIC=green /
+HOMING=orange / GUARD=red + the target gap), the status bar shows the last service result, and
+**Start is enabled only while the controller is in TOPIC** (greyed out during HOMING/GUARD). The
+page also shows live state + camera views.
 
 ---
 

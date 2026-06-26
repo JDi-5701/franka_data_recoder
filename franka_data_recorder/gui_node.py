@@ -4,16 +4,15 @@ Reads the SAME recorder config, then live-visualizes exactly what that config re
 - every image feature (observation.images.*) -> an MJPEG camera panel (N cameras adaptive),
 - every low-dim source (TCP pose, joints, gripper, wrench, ...) -> a live value row AND a
   rolling real-time curve plot (one plot per topic, one line per component),
+- a big colored CONTROL-MODE banner from the controller's ~/control_state (TOPIC/HOMING/GUARD),
 - a dataset panel showing the output path + how many episodes/frames are stored.
 
 Control buttons: Start / Stop / Discard (recording) and Go Home / Go Pose (homing). All call
-the recorder's std_srvs/Trigger services.
+the recorder's std_srvs/Trigger services; the last result is shown in the status bar. Start is
+ENABLED only while the controller is in TOPIC mode (greyed out otherwise) so you cannot start a
+recording mid-homing.
 
-Dataset *replay* is intentionally NOT here -- use the official `lerobot-dataset-viz` tool to
-inspect recorded datasets.
-
-Config-driven: change what the recorder records and the GUI adapts. Topics not published
-yet show "waiting...".
+Dataset replay is intentionally NOT here -- use `lerobot-dataset-viz` to inspect datasets.
 
 Run (conda ros_ml): ros2 run franka_data_recorder gui   ->  http://localhost:8088
 """
@@ -29,7 +28,7 @@ import yaml
 import rclpy
 from rclpy.node import Node
 from rclpy.executors import MultiThreadedExecutor
-from rclpy.qos import QoSProfile, ReliabilityPolicy, HistoryPolicy
+from rclpy.qos import QoSProfile, ReliabilityPolicy, HistoryPolicy, DurabilityPolicy
 from std_srvs.srv import Trigger
 from ament_index_python.packages import get_package_share_directory
 
@@ -52,6 +51,8 @@ class GuiNode(Node):
             'config_file', os.path.join(share, 'config', 'recorder.yaml')).value
         ns = self.declare_parameter('recorder_node', '/franka_data_recorder').value
         self.port = int(self.declare_parameter('port', 8088).value)
+        self.control_state_topic = self.declare_parameter(
+            'control_state_topic', '/cartesian_impedance_node/control_state').value
         with open(cfg_path) as f:
             cfg = yaml.safe_load(f)
         self.ds_root = resolve_data_root((cfg.get('dataset') or {}).get('root'), cfg_path)
@@ -77,6 +78,12 @@ class GuiNode(Node):
         self._jpeg = {}    # topic -> bytes
         self._bridge = None
 
+        # controller control-mode banner (~/control_state). Available only if the custom msg is
+        # built; without it the banner shows N/A and Start is NOT gated.
+        self._ctrl = {'available': False, 'state': 'N/A',
+                      'position_error': 0.0, 'orientation_error': 0.0}
+        self._sub_control_state()
+
         self._cli = {a: self.create_client(Trigger, f'{ns}/{srv}')
                      for a, srv in ACTIONS.items()}
         self.get_logger().info(
@@ -95,6 +102,23 @@ class GuiNode(Node):
             self.create_subscription(
                 msg_cls, topic,
                 lambda m, t=topic, f=fn: self._state.__setitem__(t, f(m).tolist()), qos)
+
+    def _sub_control_state(self):
+        try:
+            from franka_cartesian_impedance_msgs.msg import ControlState
+        except Exception as e:  # noqa - msg pkg not built / non-Franka controller
+            self.get_logger().warn(f'ControlState unavailable ({e}); banner = N/A, Start ungated')
+            return
+        qos = QoSProfile(depth=1, history=HistoryPolicy.KEEP_LAST,
+                         durability=DurabilityPolicy.TRANSIENT_LOCAL)
+        self.create_subscription(ControlState, self.control_state_topic,
+                                 self._control_state_cb, qos)
+        self._ctrl['available'] = True
+
+    def _control_state_cb(self, msg):
+        self._ctrl.update(available=True, state=msg.state,
+                          position_error=msg.position_error,
+                          orientation_error=msg.orientation_error)
 
     def _on_image(self, topic, msg):
         try:
@@ -132,6 +156,9 @@ class GuiNode(Node):
     def state(self):
         return {f['topic']: self._state.get(f['topic']) for f in self.fields}
 
+    def control_state(self):
+        return self._ctrl
+
     def jpeg(self, topic):
         return self._jpeg.get(topic)
 
@@ -152,7 +179,6 @@ class GuiNode(Node):
         return info
 
     def _latest_dataset_dir(self):
-        # timestamp suffix sorts lexically, so the max glob match is the newest run
         candidates = [d for d in glob.glob(self.ds_root + '_*')
                       if os.path.exists(os.path.join(d, 'meta', 'info.json'))]
         return max(candidates) if candidates else self.ds_root
@@ -160,37 +186,45 @@ class GuiNode(Node):
 
 PAGE = r"""<!doctype html><html><head><meta charset="utf-8"><title>Franka Recorder</title>
 <meta name="viewport" content="width=device-width,initial-scale=1"><style>
- body{font-family:system-ui,sans-serif;background:#111;color:#eee;margin:0;padding:16px}
- h1{font-weight:500;font-size:19px;margin:0 0 10px}#rec{color:#f55;font-weight:600;margin-left:8px}
- .bar{display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin-bottom:12px}
- button{font-size:15px;padding:11px 18px;border:0;border-radius:9px;color:#fff;cursor:pointer}
+ body{font-family:system-ui,sans-serif;background:#111;color:#eee;margin:0;padding:18px}
+ h1{font-weight:500;font-size:20px;margin:0 0 10px}#rec{color:#f55;font-weight:600;margin-left:8px}
+ #mode{font-size:30px;font-weight:800;letter-spacing:2px;padding:18px 22px;border-radius:14px;
+   margin-bottom:14px;text-align:center;transition:background .2s}
+ .m-topic{background:#1b5e20;color:#b9f6ca}.m-homing{background:#e65100;color:#ffe0b2}
+ .m-guard{background:#b71c1c;color:#ffcdd2}.m-na{background:#2a2a2a;color:#999}
+ #mode .sub{display:block;font-size:15px;font-weight:500;letter-spacing:0;margin-top:6px;opacity:.85}
+ .bar{display:flex;gap:12px;flex-wrap:wrap;align-items:center;margin-bottom:12px}
+ button{font-size:16px;padding:13px 22px;border:0;border-radius:10px;color:#fff;cursor:pointer}
  .start{background:#2e7d32}.stop{background:#c62828}.discard{background:#616161}
  .gohome{background:#1565c0}.gopose{background:#00695c}
- #status{margin-left:auto;color:#9fd;font-size:14px}.err{color:#f99}
- #ds{background:#181818;border:1px solid #333;border-radius:8px;padding:8px 12px;margin-bottom:14px;font-size:13px;color:#bcd}
- .cams{display:flex;gap:12px;flex-wrap:wrap;margin-bottom:14px}
- .cam{background:#000;border:1px solid #333;border-radius:8px;overflow:hidden}
- .cam img{display:block;max-width:380px;height:auto}.cam .cap{font-size:12px;color:#aaa;padding:3px 8px}
- .grid{display:flex;flex-wrap:wrap;gap:12px}
- .fld{background:#181818;border:1px solid #2a2a2a;border-radius:8px;padding:8px 10px;width:400px}
- .hd{display:flex;justify-content:space-between;font-size:13px;margin-bottom:4px}
- .hd .k{color:#8cf}.hd .v{font-family:ui-monospace,monospace;color:#cfc}
- canvas{display:block;width:100%;height:90px;background:#0d0d0d;border-radius:4px}
+ button:disabled{opacity:.35;cursor:not-allowed;filter:grayscale(.6)}
+ #status{font-size:15px;padding:10px 14px;border-radius:8px;background:#181818;border:1px solid #333;
+   margin-bottom:14px;color:#9fd}#status.err{color:#f99;border-color:#822}
+ #ds{background:#181818;border:1px solid #333;border-radius:8px;padding:10px 14px;margin-bottom:16px;font-size:14px;color:#bcd}
+ .cams{display:flex;gap:14px;flex-wrap:wrap;margin-bottom:16px}
+ .cam{background:#000;border:1px solid #333;border-radius:10px;overflow:hidden}
+ .cam img{display:block;max-width:640px;width:100%;height:auto}.cam .cap{font-size:13px;color:#aaa;padding:5px 10px}
+ .grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(620px,1fr));gap:16px}
+ .fld{background:#181818;border:1px solid #2a2a2a;border-radius:10px;padding:12px 14px}
+ .hd{display:flex;justify-content:space-between;font-size:15px;margin-bottom:6px}
+ .hd .k{color:#8cf;font-weight:600}.hd .v{font-family:ui-monospace,monospace;color:#cfc;font-size:15px}
+ canvas{display:block;width:100%;height:170px;background:#0d0d0d;border-radius:6px}
 </style></head><body>
 <h1>Franka Data Recorder <span id="rec"></span></h1>
+<div id="mode" class="m-na">—</div>
 <div class="bar">
- <button class="start" onclick="call('start')">● Start</button>
+ <button class="start" id="btnStart" onclick="call('start')">● Start</button>
  <button class="stop"  onclick="call('stop')">■ Stop</button>
  <button class="discard" onclick="call('discard')">Discard</button>
  <button class="gohome" onclick="call('go_home')">⌂ Go Home</button>
  <button class="gopose" onclick="call('go_pose')">Go Pose</button>
- <span id="status">ready</span>
 </div>
+<div id="status">ready</div>
 <div id="ds">dataset: …</div>
 <div class="cams" id="cams"></div>
 <div class="grid" id="grid"></div>
 <script>
-const N=240, COLS=['#6cf','#fc6','#6f9','#f69','#9cf','#fc9','#c9f','#ff8'];
+const N=320, COLS=['#6cf','#fc6','#6f9','#f69','#9cf','#fc9','#c9f','#ff8'];
 let fields=[], P={};
 async function init(){
  const L=await (await fetch('/layout')).json();
@@ -201,15 +235,31 @@ async function init(){
  const g=document.getElementById('grid');
  fields.forEach(f=>{g.insertAdjacentHTML('beforeend',
    `<div class="fld"><div class="hd"><span class="k">${f.label}</span><span class="v" id="v_${f.topic}">waiting…</span></div>`+
-   `<canvas id="c_${f.topic}" width="380" height="90"></canvas></div>`);
+   `<canvas id="c_${f.topic}" width="600" height="170"></canvas></div>`);
    P[f.topic]={cv:document.getElementById('c_'+f.topic),buf:[]};});
  setInterval(poll,150); setInterval(loadDs,2000); loadDs();
+ setInterval(pollMode,250); pollMode();
+}
+async function pollMode(){
+ try{const m=await (await fetch('/control_state')).json();
+  const el=document.getElementById('mode'), btn=document.getElementById('btnStart');
+  let cls='m-na', txt='CONTROL STATE: N/A', sub='(ControlState msg not available)';
+  if(m.available){
+   const s=m.state||'?';
+   cls = s=='TOPIC'?'m-topic': s=='HOMING'?'m-homing': s=='GUARD'?'m-guard':'m-na';
+   txt = s;
+   sub = `pos err ${(m.position_error*1000).toFixed(0)} mm · rot err ${m.orientation_error.toFixed(1)}°`;
+  }
+  el.className=cls; el.innerHTML=`${txt}<span class="sub">${sub}</span>`;
+  // Start only allowed in TOPIC (or if control_state unavailable -> ungated)
+  btn.disabled = m.available && (m.state!='TOPIC');
+ }catch(e){}
 }
 function draw(p){
  const cv=p.cv,ctx=cv.getContext('2d'),W=cv.width,H=cv.height; ctx.clearRect(0,0,W,H);
  let mn=1e9,mx=-1e9; p.buf.forEach(b=>b.forEach(v=>{if(v<mn)mn=v;if(v>mx)mx=v;}));
  if(!(mx>mn)){mn-=1;mx+=1;} const pad=(mx-mn)*0.1; mn-=pad; mx+=pad;
- p.buf.forEach((b,ci)=>{ctx.strokeStyle=COLS[ci%COLS.length];ctx.lineWidth=1.2;ctx.beginPath();
+ p.buf.forEach((b,ci)=>{ctx.strokeStyle=COLS[ci%COLS.length];ctx.lineWidth=1.4;ctx.beginPath();
   b.forEach((v,j)=>{const x=j/(N-1)*W, y=H-(v-mn)/(mx-mn)*H; j?ctx.lineTo(x,y):ctx.moveTo(x,y);});
   ctx.stroke();});
 }
@@ -234,10 +284,10 @@ async function loadDs(){
 async function call(a){
  const s=document.getElementById('status'); s.className=''; s.textContent=a+'…';
  try{const j=await (await fetch('/api/'+a,{method:'POST'})).json();
-  s.textContent=j.message; s.className=j.success?'':'err';
+  s.textContent=`${a}: ${j.message}`; s.className=j.success?'':'err';
   if(j.success&&a=='start')document.getElementById('rec').textContent='● REC';
   if(j.success&&(a=='stop'||a=='discard'))document.getElementById('rec').textContent='';
- }catch(e){s.textContent='request failed';s.className='err';}
+ }catch(e){s.textContent=a+': request failed';s.className='err';}
 }
 init();
 </script></body></html>"""
@@ -260,6 +310,8 @@ def _make_handler(node):
                 self._send(200, json.dumps(node.layout()), 'application/json')
             elif self.path == '/state':
                 self._send(200, json.dumps(node.state()), 'application/json')
+            elif self.path == '/control_state':
+                self._send(200, json.dumps(node.control_state()), 'application/json')
             elif self.path == '/dataset':
                 self._send(200, json.dumps(node.dataset()), 'application/json')
             elif self.path.startswith('/stream/'):

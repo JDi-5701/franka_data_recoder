@@ -24,7 +24,6 @@ import rclpy
 from rclpy.node import Node
 from rclpy.qos import QoSProfile, ReliabilityPolicy, HistoryPolicy
 from std_srvs.srv import Trigger
-from std_msgs.msg import Bool
 from ament_index_python.packages import get_package_share_directory
 
 from .extractors import get_extractor, default_names
@@ -193,13 +192,10 @@ class RecorderNode(Node):
         self.create_service(Trigger, '~/stop_recording', self._on_stop)
         self.create_service(Trigger, '~/discard_episode', self._on_discard)
 
-        # Homing services (go_home / go_pose). The controller drives its OWN equilibrium while
-        # homing and IGNORES /target_pose until reached, so there is no pose conflict. We still
-        # poke /reset_teleop so teleop_interface re-latches its (stale) equilibrium to the new
-        # pose afterwards and resumes -> the arm does not snap back the instant homing ends.
-        self._reset_teleop_pub = self.create_publisher(
-            Bool, cfg.get('reset_teleop_topic', '/reset_teleop'), 10)
-        self._resume_timer = None
+        # Homing services (go_home / go_pose) are thin forwarders to the controller. The
+        # controller OWNS the lock: it ignores /target_pose while homing and re-takes control
+        # via its own GUARD afterwards (teleop respects ~/control_state). So the recorder just
+        # calls the controller service -- no /reset_teleop, no teleop coordination here.
 
         # --- go_home button: forwards to the controller's ~/go_home (std_srvs/Trigger), which
         #     drives to the controller's OWN fixed home_pose. By design this takes NO pose param
@@ -304,18 +300,17 @@ class RecorderNode(Node):
         self.get_logger().info(resp.message)
         return resp
 
-    # ---- homing services (non-blocking: home the robot, then re-latch teleop) -----------
+    # ---- homing services (thin forwarders; the controller owns the lock + hand-over) ------
     def _on_go_home(self, req, resp):
-        """Drive to the controller's OWN fixed home_pose (std_srvs/Trigger, no pose param)."""
+        """Forward to the controller's ~/go_home (Trigger) -> its fixed home_pose."""
         if self._recording:
             resp.success, resp.message = False, 'stop recording before go_home'
             return resp
         if not self._gohome_trigger_cli.wait_for_service(timeout_sec=2.0):
             resp.success, resp.message = False, 'go_home service unavailable'
             return resp
-        self._reset_teleop_pub.publish(Bool(data=True))   # stop teleop fighting the homing
         self._gohome_trigger_cli.call_async(
-            Trigger.Request()).add_done_callback(self._after_home)
+            Trigger.Request()).add_done_callback(lambda f: self._log_homing('go_home', f))
         resp.success, resp.message = True, 'go_home started'
         self.get_logger().info(resp.message)
         return resp
@@ -338,33 +333,21 @@ class RecorderNode(Node):
         (goal.pose.orientation.x, goal.pose.orientation.y,
          goal.pose.orientation.z, goal.pose.orientation.w) = map(float, o)
         goal.max_velocity = self._go_pose_vel
-        self._reset_teleop_pub.publish(Bool(data=True))   # stop teleop fighting the homing
-        self._gopose_cli.call_async(goal).add_done_callback(self._after_home)
+        self._gopose_cli.call_async(goal).add_done_callback(lambda f: self._log_homing('go_pose', f))
         resp.success, resp.message = True, 'go_pose started'
         self.get_logger().info(resp.message)
         return resp
 
-    def _after_home(self, future):
+    def _log_homing(self, what, future):
         try:
             res = future.result()
         except Exception as e:  # noqa
-            self.get_logger().error(f'go_home call failed: {e}')
-            res = None
+            self.get_logger().error(f'{what} call failed: {e}')
+            return
         if res is not None and not res.success:
-            self.get_logger().warn(f'go_home: {res.message}')
-        # 2) robot is now at home (or wherever it stopped). Re-latch teleop's equilibrium to
-        #    the current pose (True), then resume publishing shortly after (False). The small
-        #    delay guarantees teleop processes the re-latch (with a fresh current_pose) first.
-        self._reset_teleop_pub.publish(Bool(data=True))
-        if self._resume_timer is not None:
-            self._resume_timer.cancel()
-        self._resume_timer = self.create_timer(0.3, self._resume_teleop)
-
-    def _resume_teleop(self):
-        self._resume_timer.cancel()
-        self._resume_timer = None
-        self._reset_teleop_pub.publish(Bool(data=False))  # teleop resumes from the new pose
-        self.get_logger().info('reset done -> teleop re-latched + resumed')
+            self.get_logger().warn(f'{what}: {res.message}')
+        else:
+            self.get_logger().info(f'{what} done (controller re-takes control via GUARD)')
 
 
 def main():
