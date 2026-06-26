@@ -271,9 +271,16 @@ View it:
 Buttons: **Start / Stop / Discard** call the record services; **Go Home** calls `~/go_home`
 (controller's fixed home_pose) and **Go Pose** calls `~/go_pose` (the `go_pose:` pose in the
 config). A big colored banner shows the controller's `~/control_state` (TOPIC=green /
-HOMING=orange / GUARD=red + the target gap), the status bar shows the last service result, and
-**Start is enabled only while the controller is in TOPIC** (greyed out during HOMING/GUARD). The
-page also shows live state + camera views.
+HOMING=orange / GUARD=red + the target gap), a stat row shows **episodes recorded / frames**,
+and the status bar shows the last service result. Live state curves + camera views below.
+
+Button gating (driven by `~/control_state` + recording state):
+- **Start** enabled only while the controller is in **TOPIC** and not already recording (greyed
+  during HOMING/GUARD or while recording).
+- **Stop / Discard** enabled only while recording.
+- **Go Home / Go Pose** disabled while a homing is in progress (HOMING).
+- Pressing **Go Home / Go Pose while recording** makes the recorder **discard the in-progress
+  episode** (homing mid-demo would corrupt it), then home.
 
 ---
 

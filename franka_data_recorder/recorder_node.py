@@ -301,29 +301,40 @@ class RecorderNode(Node):
         return resp
 
     # ---- homing services (thin forwarders; the controller owns the lock + hand-over) ------
+    def _discard_if_recording(self):
+        """Homing mid-recording would corrupt the demo -> drop the in-progress episode."""
+        if not self._recording:
+            return False
+        self._recording = False
+        if self._writer is not None:
+            try:
+                self._writer.discard_episode()
+            except Exception as e:  # noqa
+                self.get_logger().warn(f'discard failed: {e}')
+        self.get_logger().warn(
+            f'homing during recording -> discarded in-progress episode ({self._n_frames} frames)')
+        return True
+
     def _on_go_home(self, req, resp):
         """Forward to the controller's ~/go_home (Trigger) -> its fixed home_pose."""
-        if self._recording:
-            resp.success, resp.message = False, 'stop recording before go_home'
-            return resp
+        discarded = self._discard_if_recording()
         if not self._gohome_trigger_cli.wait_for_service(timeout_sec=2.0):
             resp.success, resp.message = False, 'go_home service unavailable'
             return resp
         self._gohome_trigger_cli.call_async(
             Trigger.Request()).add_done_callback(lambda f: self._log_homing('go_home', f))
-        resp.success, resp.message = True, 'go_home started'
+        resp.success, resp.message = True, \
+            ('discarded in-progress episode; ' if discarded else '') + 'go_home started'
         self.get_logger().info(resp.message)
         return resp
 
     def _on_go_pose(self, req, resp):
         """Drive to the configured `go_pose.pose` (recorder.yaml) via the controller go_pose."""
-        if self._recording:
-            resp.success, resp.message = False, 'stop recording before go_pose'
-            return resp
         if self._gopose_cli is None:
             resp.success, resp.message = (
                 False, 'go_pose unavailable (no GoToPose msg or no pose configured)')
             return resp
+        discarded = self._discard_if_recording()
         if not self._gopose_cli.wait_for_service(timeout_sec=2.0):
             resp.success, resp.message = False, 'go_pose service unavailable'
             return resp
@@ -334,7 +345,8 @@ class RecorderNode(Node):
          goal.pose.orientation.z, goal.pose.orientation.w) = map(float, o)
         goal.max_velocity = self._go_pose_vel
         self._gopose_cli.call_async(goal).add_done_callback(lambda f: self._log_homing('go_pose', f))
-        resp.success, resp.message = True, 'go_pose started'
+        resp.success, resp.message = True, \
+            ('discarded in-progress episode; ' if discarded else '') + 'go_pose started'
         self.get_logger().info(resp.message)
         return resp
 

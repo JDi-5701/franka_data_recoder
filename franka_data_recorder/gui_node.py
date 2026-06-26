@@ -5,12 +5,15 @@ Reads the SAME recorder config, then live-visualizes exactly what that config re
 - every low-dim source (TCP pose, joints, gripper, wrench, ...) -> a live value row AND a
   rolling real-time curve plot (one plot per topic, one line per component),
 - a big colored CONTROL-MODE banner from the controller's ~/control_state (TOPIC/HOMING/GUARD),
-- a dataset panel showing the output path + how many episodes/frames are stored.
+- a recorded-episodes / frames counter and the dataset path.
 
 Control buttons: Start / Stop / Discard (recording) and Go Home / Go Pose (homing). All call
-the recorder's std_srvs/Trigger services; the last result is shown in the status bar. Start is
-ENABLED only while the controller is in TOPIC mode (greyed out otherwise) so you cannot start a
-recording mid-homing.
+the recorder's std_srvs/Trigger services; the last result is shown in the status bar.
+Button gating:
+- Start is enabled ONLY while the controller is in TOPIC and not already recording.
+- Stop / Discard are enabled only while recording.
+- Go Home / Go Pose are disabled while a homing is in progress (HOMING).
+- Pressing Go Home / Go Pose WHILE recording makes the recorder discard the in-progress episode.
 
 Dataset replay is intentionally NOT here -- use `lerobot-dataset-viz` to inspect datasets.
 
@@ -78,8 +81,6 @@ class GuiNode(Node):
         self._jpeg = {}    # topic -> bytes
         self._bridge = None
 
-        # controller control-mode banner (~/control_state). Available only if the custom msg is
-        # built; without it the banner shows N/A and Start is NOT gated.
         self._ctrl = {'available': False, 'state': 'N/A',
                       'position_error': 0.0, 'orientation_error': 0.0}
         self._sub_control_state()
@@ -106,7 +107,7 @@ class GuiNode(Node):
     def _sub_control_state(self):
         try:
             from franka_cartesian_impedance_msgs.msg import ControlState
-        except Exception as e:  # noqa - msg pkg not built / non-Franka controller
+        except Exception as e:  # noqa
             self.get_logger().warn(f'ControlState unavailable ({e}); banner = N/A, Start ungated')
             return
         qos = QoSProfile(depth=1, history=HistoryPolicy.KEEP_LAST,
@@ -163,8 +164,6 @@ class GuiNode(Node):
         return self._jpeg.get(topic)
 
     def dataset(self):
-        # The recorder writes to a per-run timestamped dir <ds_root>_<stamp>; show the most
-        # recent one that actually has a dataset in it. Fall back to ds_root itself.
         root = self._latest_dataset_dir()
         info = {'root': root, 'exists': False, 'episodes': 0, 'frames': 0, 'fps': None}
         try:
@@ -186,46 +185,54 @@ class GuiNode(Node):
 
 PAGE = r"""<!doctype html><html><head><meta charset="utf-8"><title>Franka Recorder</title>
 <meta name="viewport" content="width=device-width,initial-scale=1"><style>
- body{font-family:system-ui,sans-serif;background:#111;color:#eee;margin:0;padding:18px}
- h1{font-weight:500;font-size:20px;margin:0 0 10px}#rec{color:#f55;font-weight:600;margin-left:8px}
- #mode{font-size:30px;font-weight:800;letter-spacing:2px;padding:18px 22px;border-radius:14px;
-   margin-bottom:14px;text-align:center;transition:background .2s}
+ body{font-family:system-ui,sans-serif;background:#111;color:#eee;margin:0;padding:20px}
+ h1{font-weight:500;font-size:22px;margin:0 0 12px}#rec{color:#f55;font-weight:700;margin-left:10px}
+ #mode{font-size:36px;font-weight:800;letter-spacing:2px;padding:22px 26px;border-radius:16px;
+   margin-bottom:16px;text-align:center;transition:background .2s}
  .m-topic{background:#1b5e20;color:#b9f6ca}.m-homing{background:#e65100;color:#ffe0b2}
  .m-guard{background:#b71c1c;color:#ffcdd2}.m-na{background:#2a2a2a;color:#999}
- #mode .sub{display:block;font-size:15px;font-weight:500;letter-spacing:0;margin-top:6px;opacity:.85}
- .bar{display:flex;gap:12px;flex-wrap:wrap;align-items:center;margin-bottom:12px}
- button{font-size:16px;padding:13px 22px;border:0;border-radius:10px;color:#fff;cursor:pointer}
+ #mode .sub{display:block;font-size:17px;font-weight:500;letter-spacing:0;margin-top:8px;opacity:.85}
+ .bar{display:flex;gap:14px;flex-wrap:wrap;align-items:center;margin-bottom:14px}
+ button{font-size:18px;padding:15px 26px;border:0;border-radius:11px;color:#fff;cursor:pointer}
  .start{background:#2e7d32}.stop{background:#c62828}.discard{background:#616161}
  .gohome{background:#1565c0}.gopose{background:#00695c}
- button:disabled{opacity:.35;cursor:not-allowed;filter:grayscale(.6)}
- #status{font-size:15px;padding:10px 14px;border-radius:8px;background:#181818;border:1px solid #333;
+ button:disabled{opacity:.3;cursor:not-allowed;filter:grayscale(.7)}
+ .stats{display:flex;gap:16px;margin-bottom:14px;flex-wrap:wrap}
+ .stat{background:#181818;border:1px solid #333;border-radius:12px;padding:14px 22px;min-width:160px;text-align:center}
+ .stat .n{font-size:40px;font-weight:800;color:#8cf;line-height:1}
+ .stat .l{font-size:14px;color:#9ab;margin-top:6px}
+ #status{font-size:16px;padding:12px 16px;border-radius:9px;background:#181818;border:1px solid #333;
    margin-bottom:14px;color:#9fd}#status.err{color:#f99;border-color:#822}
- #ds{background:#181818;border:1px solid #333;border-radius:8px;padding:10px 14px;margin-bottom:16px;font-size:14px;color:#bcd}
- .cams{display:flex;gap:14px;flex-wrap:wrap;margin-bottom:16px}
- .cam{background:#000;border:1px solid #333;border-radius:10px;overflow:hidden}
- .cam img{display:block;max-width:640px;width:100%;height:auto}.cam .cap{font-size:13px;color:#aaa;padding:5px 10px}
- .grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(620px,1fr));gap:16px}
- .fld{background:#181818;border:1px solid #2a2a2a;border-radius:10px;padding:12px 14px}
- .hd{display:flex;justify-content:space-between;font-size:15px;margin-bottom:6px}
- .hd .k{color:#8cf;font-weight:600}.hd .v{font-family:ui-monospace,monospace;color:#cfc;font-size:15px}
- canvas{display:block;width:100%;height:170px;background:#0d0d0d;border-radius:6px}
+ #ds{background:#181818;border:1px solid #333;border-radius:9px;padding:11px 15px;margin-bottom:18px;font-size:14px;color:#bcd}
+ .cams{display:flex;gap:16px;flex-wrap:wrap;margin-bottom:18px}
+ .cam{background:#000;border:1px solid #333;border-radius:12px;overflow:hidden}
+ .cam img{display:block;max-width:860px;width:100%;height:auto}.cam .cap{font-size:14px;color:#aaa;padding:6px 12px}
+ .grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(780px,1fr));gap:18px}
+ .fld{background:#181818;border:1px solid #2a2a2a;border-radius:12px;padding:14px 16px}
+ .hd{display:flex;justify-content:space-between;font-size:17px;margin-bottom:8px}
+ .hd .k{color:#8cf;font-weight:700}.hd .v{font-family:ui-monospace,monospace;color:#cfc;font-size:16px}
+ canvas{display:block;width:100%;height:240px;background:#0d0d0d;border-radius:7px}
 </style></head><body>
 <h1>Franka Data Recorder <span id="rec"></span></h1>
 <div id="mode" class="m-na">—</div>
 <div class="bar">
  <button class="start" id="btnStart" onclick="call('start')">● Start</button>
- <button class="stop"  onclick="call('stop')">■ Stop</button>
- <button class="discard" onclick="call('discard')">Discard</button>
- <button class="gohome" onclick="call('go_home')">⌂ Go Home</button>
- <button class="gopose" onclick="call('go_pose')">Go Pose</button>
+ <button class="stop"  id="btnStop" onclick="call('stop')">■ Stop</button>
+ <button class="discard" id="btnDiscard" onclick="call('discard')">Discard</button>
+ <button class="gohome" id="btnHome" onclick="call('go_home')">⌂ Go Home</button>
+ <button class="gopose" id="btnPose" onclick="call('go_pose')">Go Pose</button>
+</div>
+<div class="stats">
+ <div class="stat"><div class="n" id="nEp">0</div><div class="l">episodes recorded</div></div>
+ <div class="stat"><div class="n" id="nFr">0</div><div class="l">frames</div></div>
 </div>
 <div id="status">ready</div>
 <div id="ds">dataset: …</div>
 <div class="cams" id="cams"></div>
 <div class="grid" id="grid"></div>
 <script>
-const N=320, COLS=['#6cf','#fc6','#6f9','#f69','#9cf','#fc9','#c9f','#ff8'];
-let fields=[], P={};
+const N=400, COLS=['#6cf','#fc6','#6f9','#f69','#9cf','#fc9','#c9f','#ff8'];
+let fields=[], P={}, recording=false, ctrlAvail=false, ctrlState='N/A';
 async function init(){
  const L=await (await fetch('/layout')).json();
  const cd=document.getElementById('cams');
@@ -235,31 +242,41 @@ async function init(){
  const g=document.getElementById('grid');
  fields.forEach(f=>{g.insertAdjacentHTML('beforeend',
    `<div class="fld"><div class="hd"><span class="k">${f.label}</span><span class="v" id="v_${f.topic}">waiting…</span></div>`+
-   `<canvas id="c_${f.topic}" width="600" height="170"></canvas></div>`);
+   `<canvas id="c_${f.topic}" width="760" height="240"></canvas></div>`);
    P[f.topic]={cv:document.getElementById('c_'+f.topic),buf:[]};});
  setInterval(poll,150); setInterval(loadDs,2000); loadDs();
- setInterval(pollMode,250); pollMode();
+ setInterval(pollMode,250); pollMode(); updateButtons();
+}
+function updateButtons(){
+ const set=(id,v)=>{const e=document.getElementById(id); if(e)e.disabled=v;};
+ const notTopic = ctrlAvail && ctrlState!='TOPIC';
+ const homing   = ctrlAvail && ctrlState=='HOMING';
+ set('btnStart', recording || notTopic);   // record only in TOPIC, not already recording
+ set('btnStop', !recording);
+ set('btnDiscard', !recording);
+ set('btnHome', homing);                    // no re-trigger while homing
+ set('btnPose', homing);
+ document.getElementById('rec').textContent = recording ? '● REC' : '';
 }
 async function pollMode(){
  try{const m=await (await fetch('/control_state')).json();
-  const el=document.getElementById('mode'), btn=document.getElementById('btnStart');
+  ctrlAvail=!!m.available; ctrlState=m.state||'N/A';
+  const el=document.getElementById('mode');
   let cls='m-na', txt='CONTROL STATE: N/A', sub='(ControlState msg not available)';
-  if(m.available){
-   const s=m.state||'?';
-   cls = s=='TOPIC'?'m-topic': s=='HOMING'?'m-homing': s=='GUARD'?'m-guard':'m-na';
-   txt = s;
+  if(ctrlAvail){
+   cls = ctrlState=='TOPIC'?'m-topic': ctrlState=='HOMING'?'m-homing': ctrlState=='GUARD'?'m-guard':'m-na';
+   txt = ctrlState;
    sub = `pos err ${(m.position_error*1000).toFixed(0)} mm · rot err ${m.orientation_error.toFixed(1)}°`;
   }
   el.className=cls; el.innerHTML=`${txt}<span class="sub">${sub}</span>`;
-  // Start only allowed in TOPIC (or if control_state unavailable -> ungated)
-  btn.disabled = m.available && (m.state!='TOPIC');
+  updateButtons();
  }catch(e){}
 }
 function draw(p){
  const cv=p.cv,ctx=cv.getContext('2d'),W=cv.width,H=cv.height; ctx.clearRect(0,0,W,H);
  let mn=1e9,mx=-1e9; p.buf.forEach(b=>b.forEach(v=>{if(v<mn)mn=v;if(v>mx)mx=v;}));
  if(!(mx>mn)){mn-=1;mx+=1;} const pad=(mx-mn)*0.1; mn-=pad; mx+=pad;
- p.buf.forEach((b,ci)=>{ctx.strokeStyle=COLS[ci%COLS.length];ctx.lineWidth=1.4;ctx.beginPath();
+ p.buf.forEach((b,ci)=>{ctx.strokeStyle=COLS[ci%COLS.length];ctx.lineWidth=1.6;ctx.beginPath();
   b.forEach((v,j)=>{const x=j/(N-1)*W, y=H-(v-mn)/(mx-mn)*H; j?ctx.lineTo(x,y):ctx.moveTo(x,y);});
   ctx.stroke();});
 }
@@ -276,8 +293,10 @@ async function poll(){
 }
 async function loadDs(){
  try{const d=await (await fetch('/dataset')).json();
+  document.getElementById('nEp').textContent=d.episodes||0;
+  document.getElementById('nFr').textContent=d.frames||0;
   document.getElementById('ds').textContent= d.exists
-   ? `dataset: ${d.root}  —  ${d.episodes} episode(s), ${d.frames} frame(s) @ ${d.fps} fps`
+   ? `dataset: ${d.root}  @ ${d.fps} fps`
    : `dataset: ${d.root}  —  (empty / not created yet)`;
  }catch(e){}
 }
@@ -285,8 +304,11 @@ async function call(a){
  const s=document.getElementById('status'); s.className=''; s.textContent=a+'…';
  try{const j=await (await fetch('/api/'+a,{method:'POST'})).json();
   s.textContent=`${a}: ${j.message}`; s.className=j.success?'':'err';
-  if(j.success&&a=='start')document.getElementById('rec').textContent='● REC';
-  if(j.success&&(a=='stop'||a=='discard'))document.getElementById('rec').textContent='';
+  if(j.success){
+   if(a=='start') recording=true;
+   if(a=='stop'||a=='discard'||a=='go_home'||a=='go_pose') recording=false;
+   updateButtons(); loadDs();
+  }
  }catch(e){s.textContent=a+': request failed';s.className='err';}
 }
 init();
