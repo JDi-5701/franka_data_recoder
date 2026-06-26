@@ -16,7 +16,10 @@ task:
 # pose via the controller's go_home service (NO topic conflict with teleop), then pokes
 # /reset_teleop so teleop re-latches. Configure a per-task home pose here.
 reset:
-  go_home_service: /cartesian_impedance_node/go_home
+  # arbitrary-pose service (GoToPose). NOTE: ~/go_home is now a std_srvs/Trigger that goes
+  # to the controller's fixed home_pose; the recorder reset drives to its OWN pose below, so
+  # it uses ~/go_pose. (The old key 'go_home_service' is still accepted for back-compat.)
+  go_pose_service: /cartesian_impedance_node/go_pose
   reset_teleop_topic: /reset_teleop
   max_velocity: 0.08            # m/s during homing (<=0 -> controller default)
   pose:                         # TCP pose in the base frame
@@ -25,15 +28,23 @@ reset:
 
 features:
   # --- proprioception + force -> observation.state -------------------------------
+  # Record broadly; pick the dims you need at finetune time. Dimension names are
+  # auto-derived (pose_7d -> x,y,z,qx,qy,qz,qw; wrench_6d -> fx..tz). `name:` prefixes the
+  # generic ones (gripper -> gripper_0, gripper_1).
   observation.state:
     concat:
       - {topic: /cartesian_impedance_node/current_pose, type: PoseStamped,   extractor: pose_7d,        dim: 7}
       - {topic: /cartesian_impedance_node/ext_wrench,    type: WrenchStamped, extractor: wrench_6d,      dim: 6}
-      - {topic: /franka_gripper/joint_states,            type: JointState,    extractor: jointstate_pos, dim: 2}
+      - {topic: /franka_gripper/joint_states,            type: JointState,    extractor: jointstate_pos, dim: 2, name: gripper}
   # --- commanded action ----------------------------------------------------------
+  # EE target pose (quaternion) + gripper command. pi0.5 convention: one gripper scalar
+  # appended to the action vector (1.0=open, 0.0=closed; latched by gripper_teleop).
+  # NOTE: the quaternion (qx..qw) is a poor action rep for VLA regression -> convert to
+  # euler / 6D rotation at finetune time.
   action:
     concat:
       - {topic: /cartesian_impedance_node/target_pose,   type: PoseStamped,   extractor: pose_7d,        dim: 7}
+      - {topic: /gripper_command,                        type: Float64,       extractor: scalar,         dim: 1, names: [gripper]}
 
   # --- cameras (uncomment once a camera is connected; needs cv_bridge) ------------
   # observation.images.wrist:

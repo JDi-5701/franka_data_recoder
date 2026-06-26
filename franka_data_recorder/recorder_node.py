@@ -27,12 +27,17 @@ from std_srvs.srv import Trigger
 from std_msgs.msg import Bool
 from ament_index_python.packages import get_package_share_directory
 
-from .extractors import get_extractor
+from .extractors import get_extractor, default_names
 
 try:
-    from franka_cartesian_impedance_node.srv import GoToPose
+    # GoToPose lives in the interface-only package (no libfranka) so this imports on the
+    # operator PC too. (Older layout had it under franka_cartesian_impedance_node.)
+    from franka_cartesian_impedance_msgs.srv import GoToPose
 except Exception:  # noqa - recorder still records without the reset feature
-    GoToPose = None
+    try:
+        from franka_cartesian_impedance_node.srv import GoToPose
+    except Exception:  # noqa
+        GoToPose = None
 
 # short name -> (module, class). Also accepts the full "pkg_msgs/Type" form.
 _TYPE_MAP = {
@@ -110,12 +115,23 @@ class _Feature:
     def __init__(self, name, spec):
         self.name = name
         self.is_image = name.startswith('observation.images.')
+        specs = spec['concat'] if 'concat' in spec else [spec]
+        self.sources = [_Source(s) for s in specs]
         if 'concat' in spec:
-            self.sources = [_Source(s) for s in spec['concat']]
-            self.shape = [int(sum(s.get('dim', 0) for s in spec['concat']))]
+            self.shape = [int(sum(s.get('dim', 0) for s in specs))]
         else:
-            self.sources = [_Source(spec)]
             self.shape = list(spec['shape']) if 'shape' in spec else [int(spec.get('dim', 0))]
+        # per-dimension names for low-dim features (None for images: writer fills h/w/c).
+        # Each source may set explicit `names: [...]`, else they are auto-derived from the
+        # extractor (canonical dims, optionally prefixed by the source's `name` label).
+        if self.is_image:
+            self.names = None
+        else:
+            self.names = []
+            for s in specs:
+                dim = int(s.get('dim', 0))
+                nm = s.get('names') or default_names(s['extractor'], dim, s.get('name'))
+                self.names.extend(nm)
 
 
 class RecorderNode(Node):
@@ -187,8 +203,12 @@ class RecorderNode(Node):
         self._resume_timer = None
         self._gohome_cli = None
         if GoToPose is not None and self._reset_pose is not None:
-            self._gohome_cli = self.create_client(
-                GoToPose, rcfg.get('go_home_service', '/cartesian_impedance_node/go_home'))
+            # reset drives to a CONFIGURED pose -> the arbitrary-pose GoToPose service
+            # (~/go_pose). (~/go_home is now a std_srvs/Trigger that goes to the fixed
+            # home_pose.) Accept the old 'go_home_service' key for back-compat.
+            reset_srv = rcfg.get('go_pose_service',
+                                 rcfg.get('go_home_service', '/cartesian_impedance_node/go_pose'))
+            self._gohome_cli = self.create_client(GoToPose, reset_srv)
             self.create_service(Trigger, '~/reset', self._on_reset)
 
         self.create_timer(1.0 / self.fps, self._tick)
@@ -228,7 +248,8 @@ class RecorderNode(Node):
         if self._writer is None:
             from .lerobot_writer import LeRobotWriter
             features_meta = {f.name: {'dtype': 'video' if f.is_image else 'float32',
-                                      'shape': f.shape} for f in self.features}
+                                      'shape': f.shape, 'names': f.names}
+                             for f in self.features}
             self._writer = LeRobotWriter(
                 repo_id=self._ds_cfg['repo_id'], root=self._ds_cfg['root'],
                 fps=self.fps, robot_type=self._ds_cfg.get('robot_type', 'franka_fr3'),

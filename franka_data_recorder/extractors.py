@@ -23,6 +23,26 @@ def get_extractor(name):
     return _REGISTRY[name]
 
 
+# Canonical per-dimension names for fixed-size extractors, used to label LeRobot features
+# (so action/state dimensions show up named in viewers/configs instead of bare indices).
+EXTRACTOR_DIM_NAMES = {
+    'pose_7d': ['x', 'y', 'z', 'qx', 'qy', 'qz', 'qw'],
+    'wrench_6d': ['fx', 'fy', 'fz', 'tx', 'ty', 'tz'],
+    'twist_6d': ['vx', 'vy', 'vz', 'wx', 'wy', 'wz'],
+    'scalar': ['value'],
+}
+
+
+def default_names(extractor_name, dim, label=None):
+    """Per-dimension names for one source. Priority: canonical names for the extractor
+    (optionally prefixed with `label`), else `<label-or-extractor>_<i>`."""
+    base = EXTRACTOR_DIM_NAMES.get(extractor_name)
+    if base is not None and (not dim or len(base) == dim):
+        return [f'{label}_{n}' for n in base] if label else list(base)
+    stem = label or extractor_name
+    return [f'{stem}_{i}' for i in range(int(dim or 0))]
+
+
 @extractor("pose_7d")
 def pose_7d(msg):
     """geometry_msgs/PoseStamped -> [x,y,z, qx,qy,qz,qw]."""

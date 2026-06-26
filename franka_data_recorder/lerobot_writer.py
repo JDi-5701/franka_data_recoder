@@ -44,8 +44,10 @@ class LeRobotWriter:
                 ds_features[name] = {'dtype': 'video', 'shape': tuple(meta['shape']),
                                      'names': ['height', 'width', 'channels']}
             else:
+                # per-dimension names (e.g. action -> [x,y,z,qx,qy,qz,qw,gripper]) so the
+                # feature is self-describing; falls back to None if not provided.
                 ds_features[name] = {'dtype': 'float32', 'shape': tuple(meta['shape']),
-                                     'names': None}
+                                     'names': meta.get('names')}
 
         # Always CREATE a fresh local dataset. (Re-opening an existing one via
         # LeRobotDataset(repo_id, root) makes lerobot query the HF Hub for the dataset
