@@ -12,16 +12,22 @@ dataset:
 task:
   default: "franka teleop demonstration"   # language instruction; override with the 'task' param
 
-# Reset / go-home between episodes. The recorder's ~/reset service drives the robot to this
-# pose via the controller's go_home service (NO topic conflict with teleop), then pokes
-# /reset_teleop so teleop re-latches. Configure a per-task home pose here.
-reset:
-  # arbitrary-pose service (GoToPose). NOTE: ~/go_home is now a std_srvs/Trigger that goes
-  # to the controller's fixed home_pose; the recorder reset drives to its OWN pose below, so
-  # it uses ~/go_pose. (The old key 'go_home_service' is still accepted for back-compat.)
-  go_pose_service: /cartesian_impedance_node/go_pose
-  reset_teleop_topic: /reset_teleop
-  max_velocity: 0.08            # m/s during homing (<=0 -> controller default)
+# Homing. The recorder exposes two homing services (no ~/reset anymore): ~/go_home and
+# ~/go_pose. Both drive the robot via the controller (which IGNORES /target_pose while homing,
+# so no conflict with teleop), then poke reset_teleop_topic so teleop_interface re-latches its
+# equilibrium to the new pose and resumes (else the arm snaps back when homing ends).
+reset_teleop_topic: /reset_teleop
+
+# Go Home -> controller's ~/go_home (std_srvs/Trigger). Drives to the controller's OWN fixed
+# home_pose (set in the controller, NOT here). Takes NO pose param by design.
+go_home:
+  service: /cartesian_impedance_node/go_home
+
+# Go Pose -> controller's ~/go_pose (GoToPose). Edit this pose to change where the button sends
+# the arm. max_velocity: m/s cap during homing (<=0 -> controller default).
+go_pose:
+  service: /cartesian_impedance_node/go_pose
+  max_velocity: 0.08
   pose:                         # TCP pose in the base frame
     position: [0.4, 0.0, 0.4]
     orientation: [1.0, 0.0, 0.0, 0.0]   # [x, y, z, w]  (TCP pointing down, typical Franka)

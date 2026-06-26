@@ -193,23 +193,32 @@ class RecorderNode(Node):
         self.create_service(Trigger, '~/stop_recording', self._on_stop)
         self.create_service(Trigger, '~/discard_episode', self._on_discard)
 
-        # reset / go-home: drive the robot to a configured pose via the controller's go_home
-        # service (no topic conflict), then poke /reset_teleop so teleop re-latches.
-        rcfg = cfg.get('reset', {})
-        self._reset_pose = rcfg.get('pose')
-        self._reset_vel = float(rcfg.get('max_velocity', 0.0))
+        # Homing services (go_home / go_pose). The controller drives its OWN equilibrium while
+        # homing and IGNORES /target_pose until reached, so there is no pose conflict. We still
+        # poke /reset_teleop so teleop_interface re-latches its (stale) equilibrium to the new
+        # pose afterwards and resumes -> the arm does not snap back the instant homing ends.
         self._reset_teleop_pub = self.create_publisher(
-            Bool, rcfg.get('reset_teleop_topic', '/reset_teleop'), 10)
+            Bool, cfg.get('reset_teleop_topic', '/reset_teleop'), 10)
         self._resume_timer = None
-        self._gohome_cli = None
-        if GoToPose is not None and self._reset_pose is not None:
-            # reset drives to a CONFIGURED pose -> the arbitrary-pose GoToPose service
-            # (~/go_pose). (~/go_home is now a std_srvs/Trigger that goes to the fixed
-            # home_pose.) Accept the old 'go_home_service' key for back-compat.
-            reset_srv = rcfg.get('go_pose_service',
-                                 rcfg.get('go_home_service', '/cartesian_impedance_node/go_pose'))
-            self._gohome_cli = self.create_client(GoToPose, reset_srv)
-            self.create_service(Trigger, '~/reset', self._on_reset)
+
+        # --- go_home button: forwards to the controller's ~/go_home (std_srvs/Trigger), which
+        #     drives to the controller's OWN fixed home_pose. By design this takes NO pose param
+        #     (home lives in the controller). Trigger -> callable even where GoToPose is absent.
+        ghcfg = cfg.get('go_home', {})
+        self._gohome_trigger_cli = self.create_client(
+            Trigger, ghcfg.get('service', '/cartesian_impedance_node/go_home'))
+        self.create_service(Trigger, '~/go_home', self._on_go_home)
+
+        # --- go_pose button: drive to a CONFIGURED pose (editable in recorder.yaml `go_pose:`)
+        #     via the controller's ~/go_pose (GoToPose), separate from the reset pose.
+        gpcfg = cfg.get('go_pose', {})
+        self._go_pose = gpcfg.get('pose')
+        self._go_pose_vel = float(gpcfg.get('max_velocity', 0.0))
+        self._gopose_cli = None
+        if GoToPose is not None and self._go_pose is not None:
+            self._gopose_cli = self.create_client(
+                GoToPose, gpcfg.get('service', '/cartesian_impedance_node/go_pose'))
+            self.create_service(Trigger, '~/go_pose', self._on_go_pose)
 
         self.create_timer(1.0 / self.fps, self._tick)
         self.get_logger().info(f'recorder ready @ {self.fps} Hz. call ~/start_recording to begin.')
@@ -295,25 +304,43 @@ class RecorderNode(Node):
         self.get_logger().info(resp.message)
         return resp
 
-    # ---- reset / go-home (non-blocking: homes the robot, then pokes /reset_teleop) ------
-    def _on_reset(self, req, resp):
+    # ---- homing services (non-blocking: home the robot, then re-latch teleop) -----------
+    def _on_go_home(self, req, resp):
+        """Drive to the controller's OWN fixed home_pose (std_srvs/Trigger, no pose param)."""
         if self._recording:
-            resp.success, resp.message = False, 'stop recording before reset'
+            resp.success, resp.message = False, 'stop recording before go_home'
             return resp
-        if not self._gohome_cli.wait_for_service(timeout_sec=2.0):
+        if not self._gohome_trigger_cli.wait_for_service(timeout_sec=2.0):
             resp.success, resp.message = False, 'go_home service unavailable'
             return resp
+        self._reset_teleop_pub.publish(Bool(data=True))   # stop teleop fighting the homing
+        self._gohome_trigger_cli.call_async(
+            Trigger.Request()).add_done_callback(self._after_home)
+        resp.success, resp.message = True, 'go_home started'
+        self.get_logger().info(resp.message)
+        return resp
+
+    def _on_go_pose(self, req, resp):
+        """Drive to the configured `go_pose.pose` (recorder.yaml) via the controller go_pose."""
+        if self._recording:
+            resp.success, resp.message = False, 'stop recording before go_pose'
+            return resp
+        if self._gopose_cli is None:
+            resp.success, resp.message = (
+                False, 'go_pose unavailable (no GoToPose msg or no pose configured)')
+            return resp
+        if not self._gopose_cli.wait_for_service(timeout_sec=2.0):
+            resp.success, resp.message = False, 'go_pose service unavailable'
+            return resp
         goal = GoToPose.Request()
-        p, o = self._reset_pose['position'], self._reset_pose['orientation']
+        p, o = self._go_pose['position'], self._go_pose['orientation']
         goal.pose.position.x, goal.pose.position.y, goal.pose.position.z = map(float, p)
         (goal.pose.orientation.x, goal.pose.orientation.y,
          goal.pose.orientation.z, goal.pose.orientation.w) = map(float, o)
-        goal.max_velocity = self._reset_vel
-        # 1) tell teleop to STOP publishing so it does not fight the homing / overwrite the
-        #    controller target the instant homing finishes.
-        self._reset_teleop_pub.publish(Bool(data=True))
-        self._gohome_cli.call_async(goal).add_done_callback(self._after_home)
-        resp.success, resp.message = True, 'reset (homing) started'
+        goal.max_velocity = self._go_pose_vel
+        self._reset_teleop_pub.publish(Bool(data=True))   # stop teleop fighting the homing
+        self._gopose_cli.call_async(goal).add_done_callback(self._after_home)
+        resp.success, resp.message = True, 'go_pose started'
         self.get_logger().info(resp.message)
         return resp
 

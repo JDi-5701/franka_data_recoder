@@ -167,26 +167,29 @@ services. This avoids fighting the teleop stream.
  SpaceMouse teleop ─┐
  (or policy)        ├─► /cartesian_impedance_node/target_pose ─► robot   (ONE active driver)
                     │
- Web GUI ───────────┼─► (service) ~/reset / go_home  on the controller  ── homing, ignores target_pose
-                    ├─► (topic)   /reset_teleop       re-latch teleop equilibrium after homing
+ Web GUI ───────────┼─► (service) recorder ~/go_home / ~/go_pose  ─► controller homing, ignores target_pose
+                    ├─► (topic)   /reset_teleop                    re-latch teleop equilibrium after homing
                     └─► (service) recorder ~/start_recording / ~/stop_recording / ~/discard_episode
  Web GUI  ◄──────────── subscribes current_pose / ext_wrench / images / joint_states  (visualize)
 ```
 
-- **Reset / go-home = a service ON the controller** (`cartesian_impedance_node`) — IMPLEMENTED:
-  `~/go_home` (srv `franka_cartesian_impedance_node/GoToPose`, in-package). It creeps the
-  controller's own equilibrium to the requested pose at a slow cap and **ignores `target_pose`
-  while homing** → single owner, no conflict; blocks until reached.
-- **`~/reset` on this recorder** — IMPLEMENTED: reads the per-task home pose from
-  `config/recorder.yaml` (`reset:` section), calls the controller's `go_home`, then publishes
-  `/reset_teleop` so `teleop_interface` re-latches its equilibrium to the new pose (else it
-  yanks the arm back). So the GUI just calls `recorder ~/reset` — it never publishes poses.
+- **Homing = services ON the controller** (`cartesian_impedance_node`) — IMPLEMENTED:
+  `~/go_home` (`std_srvs/Trigger` → the controller's own fixed `home_pose` param, no pose in
+  the request) and `~/go_pose` (srv `franka_cartesian_impedance_msgs/GoToPose` → an arbitrary
+  pose). Both creep the controller's own equilibrium at a slow cap and **ignore `target_pose`
+  while homing** → single owner, no conflict; block until reached.
+- **`~/go_home` and `~/go_pose` on this recorder** — IMPLEMENTED: thin forwarders so the GUI
+  stays a pure Trigger client. `~/go_home` forwards to the controller's `~/go_home`;
+  `~/go_pose` calls the controller's `~/go_pose` with the pose from `config/recorder.yaml`
+  (`go_pose:` section). Both then publish `/reset_teleop` so `teleop_interface` re-latches its
+  equilibrium to the new pose (else it yanks the arm back) and resumes. The GUI never publishes
+  poses. (There is no `~/reset` anymore — use `~/go_home` / `~/go_pose`.)
 - **Record control = services on this recorder** (see §10).
-- The GUI is a thin web client (e.g. **rosbridge + a web page**, or **Foxglove**) that
-  subscribes for visualization and calls these services for control.
+- The GUI is a thin web client (self-contained web page) that subscribes for visualization and
+  calls these services for control.
 
-> The general version is still a command **mux** (teleop / policy / reset arbitrated onto
-> `target_pose`); the go_home service is the minimal slice and enough for record + reset.
+> The general version is still a command **mux** (teleop / policy / homing arbitrated onto
+> `target_pose`); the go_home/go_pose services are the minimal slice and enough for recording.
 
 ---
 
@@ -220,17 +223,20 @@ ros2 launch franka_data_recorder recorder.launch.py task:="pick up the cube"
 ros2 launch franka_data_recorder recorder.launch.py task:="pick up the cube" dataset_name:=pick_cube
 #   or on a bare node:  ros2 run franka_data_recorder recorder --ros-args -p dataset_name:=pick_cube
 
-# control it (CLI now; GUI/button later call the same services)
+# control it (CLI now; GUI buttons call the same services). All are std_srvs/Trigger.
 ros2 service call /franka_data_recorder/start_recording std_srvs/srv/Trigger
 ros2 service call /franka_data_recorder/stop_recording  std_srvs/srv/Trigger
 ros2 service call /franka_data_recorder/discard_episode std_srvs/srv/Trigger
-ros2 service call /franka_data_recorder/reset           std_srvs/srv/Trigger   # home + re-latch teleop
+ros2 service call /franka_data_recorder/go_home         std_srvs/srv/Trigger   # controller's fixed home_pose + re-latch teleop
+ros2 service call /franka_data_recorder/go_pose         std_srvs/srv/Trigger   # config go_pose.pose + re-latch teleop
 ```
 
-The reset home pose lives in `config/recorder.yaml` under `reset:` (per-task). The
-controller's homing service can also be called directly:
+`~/go_home` drives to the controller's OWN fixed `home_pose` (no pose param). `~/go_pose`
+drives to the editable pose in `config/recorder.yaml` under `go_pose:`. The controller's
+homing services can also be called directly:
 ```bash
-ros2 service call /cartesian_impedance_node/go_home franka_cartesian_impedance_node/srv/GoToPose \
+ros2 service call /cartesian_impedance_node/go_home std_srvs/srv/Trigger   # fixed home_pose, no params
+ros2 service call /cartesian_impedance_node/go_pose franka_cartesian_impedance_msgs/srv/GoToPose \
   "{pose: {position: {x: 0.4, y: 0.0, z: 0.4}, orientation: {x: 1.0, y: 0.0, z: 0.0, w: 0.0}}, max_velocity: 0.08}"
 ```
 Edit `config/recorder.yaml` to change **what** is recorded — no code change. Add a new
@@ -241,9 +247,10 @@ it from the config.
 > `LeRobotDataset` API — if your installed version differs, only `lerobot_writer.py` needs a
 > tweak (import path / `add_frame` / `save_episode` signature).
 
-### Web GUI (start/stop/discard/reset buttons)
+### Web GUI (start/stop/discard/go_home/go_pose buttons)
 A minimal self-contained web page (no rosbridge) whose buttons call the recorder services.
-Runs on the GPU; view it locally or SSH-tunnel the port to your laptop.
+It is **live view + control only** — to inspect/replay recorded datasets use the official
+`lerobot-dataset-viz` tool. Runs on the GPU; view it locally or SSH-tunnel the port.
 ```bash
 # on the GPU (recorder must also be running)
 ros2 run franka_data_recorder gui            # serves http://localhost:8088
@@ -256,18 +263,19 @@ View it:
   ssh -L 8088:localhost:8088 prs@<gpu-tailscale-ip>     # keep open
   # then browse http://localhost:8088 on your PC
   ```
-Buttons: **Start / Stop / Discard** call the record services; **Reset robot** calls `~/reset`
-(go_home + re-latch teleop). The page is the place to add live state + camera views later.
+Buttons: **Start / Stop / Discard** call the record services; **Go Home** calls `~/go_home`
+(controller's fixed home_pose) and **Go Pose** calls `~/go_pose` (the `go_pose:` pose in the
+config) — both re-latch teleop afterwards. The page also shows live state + camera views.
 
 ---
 
 ## 11. Roadmap
 1. ✅ v0 recorder (low-dim streams → LeRobot) — **test on hardware**, confirm a dataset loads
    in `lerobot`.
-2. ✅ `~/go_home` service + homing mode in `cartesian_impedance_node`, recorder `~/reset`
-   wired (§8) — **build + test on hardware**.
+2. ✅ `~/go_home` (Trigger) + `~/go_pose` (GoToPose) homing in `cartesian_impedance_node`,
+   recorder `~/go_home` / `~/go_pose` forwarders wired (§8) — **build + test on hardware**.
 3. Add arm `joint_states` publisher to the controller (§6.1).
-4. Web GUI: rosbridge/Foxglove page — visualize state+images, buttons for reset/record.
+4. Web GUI: visualize state+images, buttons for homing/record (replay → `lerobot-dataset-viz`).
 5. Add a camera; record `observation.images.*`; first π0.5 fine-tune smoke test.
 6. Add depth / extra cameras for world-model (JEPA/Cosmos) compatibility.
 
@@ -276,9 +284,9 @@ Buttons: **Start / Stop / Discard** call the record services; **Reset robot** ca
 ## 12. Adaptivity — what's config-driven today, and what's not (TODO)
 
 ### ✅ What adapts right now (edit `recorder.yaml`, no code change)
-The recorder, the GUI dashboard, and the data player are all built dynamically from the
-`features:` block of the config — so the same package handles very different robot setups by
-config alone:
+The recorder and the GUI dashboard are built dynamically from the `features:` block of the
+config — so the same package handles very different robot setups by config alone (dataset
+*replay* is delegated to the official `lerobot-dataset-viz`):
 
 | Scenario | How |
 |---|---|
@@ -288,26 +296,72 @@ config alone:
 | **Multiple cameras** | add several `observation.images.<name>` features → GUI shows N panels automatically |
 | **Naming a run** | `dataset_name:=<task>` → `data/<task>_<timestamp>/` (folder + repo_id) |
 
-The **GUI** reads the same config and adapts its camera panels + curve plots; the **player**
-lists every dataset under `data/` and replays a chosen episode through those same panels.
+The **GUI** reads the same config and adapts its camera panels + curve plots for the LIVE view.
+Recorded-dataset replay/inspection is delegated to the official `lerobot-dataset-viz` (the GUI
+no longer ships its own player).
 
 ### ⚠️ Current limits (carry these as TODO)
-1. **Cross-config replay is not self-describing.** The player slices a recorded feature
-   vector (e.g. `observation.state`, 22-dim) back onto per-topic curves using the **config the
-   GUI was launched with** — *not* the dataset's own schema. Replaying a dataset recorded under
-   a *different* config (different dims / topics / camera count) than the running GUI will
-   mis-slice or mismatch. Root cause: LeRobot `meta/info.json` stores feature names + shapes
-   but **not** our `concat → topic` breakdown.
-   **TODO:** write the topic/concat mapping into the dataset at record time (a sidecar next to
-   `meta/`), and have the player rebuild panels + slicing per-dataset from *its own* schema, so
-   any dataset replays correctly regardless of the GUI's launch config.
-2. **All configured sources are mandatory.** `_build_frame` drops a frame until *every* listed
+1. **All configured sources are mandatory.** `_build_frame` drops a frame until *every* listed
    topic has published, so one config cannot "record whatever happens to be live" — joint-only
    vs tcp-only is handled by swapping configs, not auto-detection.
    **TODO:** an `optional: true` flag per source — skip a missing optional source instead of
    dropping the whole frame, so one config can adapt to "joints if present, TCP if present".
-3. **Novel message types need code.** Known types (PoseStamped / JointState / WrenchStamped /
+2. **Novel message types need code.** Known types (PoseStamped / JointState / WrenchStamped /
    Image …) work from config; a brand-new message type needs a small extractor in
    `extractors.py` + a `_TYPE_MAP` entry.
    **TODO:** document the extractor-plugin pattern (and ship ready-made multi-arm / multi-cam /
    joint-only / tcp-only example configs).
+
+---
+
+## 13. Action space for π0.5 / VLA finetuning (what we record & why)
+
+What we record as `action`, and how it maps to a π0/π0.5 finetune. Verified against the
+HF LeRobot π₀ docs (<https://huggingface.co/docs/lerobot/pi0>) and openpi
+(<https://github.com/Physical-Intelligence/openpi>).
+
+### The two axes — and who decides them
+- **absolute vs delta (relative): a TRAIN-TIME flag, not a recording choice.** π0 predicts
+  **absolute** actions *by default*; relative/delta is opt-in at training and computed for you
+  by LeRobot as `action − current_state` over the action chunk:
+  ```bash
+  # recompute stats in relative space (gripper stays absolute), chunk = policy chunk_size
+  lerobot-edit-dataset --repo_id <ds> --operation.type recompute_stats \
+      --operation.relative_action true --operation.chunk_size 50 \
+      --operation.relative_exclude_joints "['gripper']"
+  # then train with relative actions
+  lerobot-train ... --policy.type=pi0 --policy.use_relative_actions=true \
+      --policy.relative_exclude_joints='["gripper"]'
+  ```
+  → **Record ABSOLUTE; don't bake deltas into the recording.** Flip to delta at finetune.
+- **joint vs TCP/end-effector: decided by the DATASET, not the model.** π0/π0.5 is
+  cross-embodiment (UR5e, Franka, bimanual, …) and consumes whatever `action` /
+  `observation.state` contain. So either is valid; pick what matches your control interface.
+
+### Our decision for this setup (cartesian impedance, spacemouse teleop)
+- **`action` = absolute TCP pose** (`/cartesian_impedance_node/target_pose`, base frame,
+  7D = xyz + quaternion). Rationale: the impedance controller is commanded by an **absolute
+  TCP target_pose**, so *the recorded action is exactly what we send the robot* → deployment is
+  trivial (policy output → `target_pose`, zero conversion, train/deploy aligned). A joint
+  action would mismatch the TCP control interface (would need IK + a joint controller).
+- `observation.state` = `current_pose` + `ext_wrench` + gripper (and optionally arm
+  `joint_states`, now published — uncomment in `recorder.yaml`).
+
+### Two pitfalls (carry into the finetune transforms, NOT the recorder)
+1. **Quaternion is a poor VLA action rep — convert to 6D rotation or euler at finetune.** This
+   matters especially for **relative** actions: LeRobot's relative transform does a naive
+   per-dimension `action − state`, which is *mathematically wrong* for quaternions. Absolute
+   training tolerates a raw quaternion; relative does not. Do the conversion in the
+   openpi/LeRobot input/output transforms — the recorder keeps the raw quaternion.
+2. **For relative actions, `action` and `observation.state` must share space + ordering** (so
+   `action − state` is meaningful). Our `target_pose` and `current_pose` are both `pose_7d` →
+   their first 7 dims already align; exclude the gripper via `relative_exclude_joints`.
+
+### Finetune / deploy quick facts
+- Dataset keys π0 expects (LeRobot, which this recorder writes): `observation.images.<cam>`,
+  `observation.state`, `action`, `task`.
+- `chunk_size` default **50**; control up to **50 Hz**.
+- Train: `lerobot-train --policy.type=pi0 --policy.pretrained_path=lerobot/pi0_base
+  --dataset.repo_id=<ds> ...`. Deploy: policy output is in the **same space as training** —
+  absolute TCP → feed straight to `target_pose`; relative → add to the current state at
+  inference.
