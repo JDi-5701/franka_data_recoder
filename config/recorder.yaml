@@ -27,7 +27,7 @@ go_pose:
   service: /cartesian_impedance_node/go_pose
   max_velocity: 0.08
   pose:                         # TCP pose in the base frame (manually set ~below home)
-    position: [0.3, 0.0, 0.3]
+    position: [0.5, 0.0, 0.4]
     orientation: [1.0, 0.0, 0.0, 0.0]   # [x, y, z, w]  (TCP pointing down, typical Franka)
 
 features:
