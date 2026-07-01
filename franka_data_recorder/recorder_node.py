@@ -16,6 +16,7 @@ Params:
 import importlib
 import json
 import os
+import random
 from datetime import datetime
 
 import numpy as np
@@ -219,6 +220,10 @@ class RecorderNode(Node):
         gpcfg = cfg.get('go_pose', {})
         self._go_pose = gpcfg.get('pose')
         self._go_pose_vel = float(gpcfg.get('max_velocity', 0.0))
+        # optional per-axis uniform randomization of the reset point (varies episode start
+        # poses for better generalization). [dx,dy,dz] half-ranges in metres; absent/zeros
+        # -> no randomization. Sampled fresh on each go_pose call.
+        self._go_pose_rand = (gpcfg.get('randomize') or {}).get('position')
         self._gopose_cli = None
         if GoToPose is not None and self._go_pose is not None:
             self._gopose_cli = self.create_client(
@@ -361,8 +366,14 @@ class RecorderNode(Node):
             resp.success, resp.message = False, 'go_pose service unavailable'
             return resp
         goal = GoToPose.Request()
-        p, o = self._go_pose['position'], self._go_pose['orientation']
-        goal.pose.position.x, goal.pose.position.y, goal.pose.position.z = map(float, p)
+        p = [float(c) for c in self._go_pose['position']]
+        if self._go_pose_rand:
+            p = [c + random.uniform(-float(dr), float(dr))
+                 for c, dr in zip(p, self._go_pose_rand)]
+            self.get_logger().info(
+                'go_pose randomized -> [%.3f, %.3f, %.3f]' % (p[0], p[1], p[2]))
+        o = self._go_pose['orientation']
+        goal.pose.position.x, goal.pose.position.y, goal.pose.position.z = p
         (goal.pose.orientation.x, goal.pose.orientation.y,
          goal.pose.orientation.z, goal.pose.orientation.w) = map(float, o)
         goal.max_velocity = self._go_pose_vel

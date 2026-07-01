@@ -29,6 +29,8 @@ go_pose:
   pose:                         # TCP pose in the base frame (manually set ~below home)
     position: [0.5, 0.0, 0.4]
     orientation: [1.0, 0.0, 0.0, 0.0]   # [x, y, z, w]  (TCP pointing down, typical Franka)
+  randomize:                    # per-axis uniform +/- range (m) added to position each Go Pose;
+    position: [0.05, 0.05, 0.03]   # varies episode start poses. all-zero / remove -> disabled.
 
 features:
   # --- proprioception + force -> observation.state -------------------------------
