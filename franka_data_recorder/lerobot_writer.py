@@ -98,3 +98,16 @@ class LeRobotWriter:
             if hasattr(self.ds, attr):
                 getattr(self.ds, attr)()
                 return
+
+    def close(self):
+        """Flush buffered shard writers. REQUIRED on lerobot v3.0 (>=0.4.0): episodes are
+        accumulated into shared parquet/mp4 shards and the trailing shard(s) + metadata buffer
+        are only written out by finalize(). Without this the last recordings can be lost.
+        No-op on v2.1 (one file per episode -> method absent)."""
+        if hasattr(self.ds, 'finalize'):
+            try:
+                self.ds.finalize()
+                self._info('finalized LeRobot dataset (shards flushed)')
+            except Exception as e:  # noqa - shutdown path, log but don't raise
+                if self._log:
+                    self._log.error('finalize failed: %s' % e)

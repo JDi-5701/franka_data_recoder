@@ -50,12 +50,15 @@ features:
       - {topic: /cartesian_impedance_node/target_pose,   type: PoseStamped,   extractor: pose_7d,        dim: 7}
       - {topic: /gripper_command,                        type: Float64,       extractor: scalar,         dim: 1, names: [gripper]}
 
-  # --- cameras (uncomment once a camera is connected; needs cv_bridge) ------------
-  # observation.images.wrist:
-  #   topic: /camera/wrist/color/image_raw
-  #   type: Image
-  #   extractor: image_rgb
-  #   shape: [480, 640, 3]
+  # --- cameras (needs cv_bridge in the runtime env) -------------------------------
+  # usb_cam (isy webcam): rgb8, 1280x720 @30fps. shape is [H, W, 3].
+  # Use /image_raw (no rectify dependency) OR /image_rect -- but the SAME choice must be
+  # used again at pi0.5 deploy time so train/inference images match.
+  observation.images.base:
+    topic: /image_raw
+    type: Image
+    extractor: image_rgb
+    shape: [720, 1280, 3]
 
   # --- arm joints (uncomment once cartesian_impedance_node publishes joint_states) -
   # observation.state already concatenates; to add 7-dof arm q, insert a source:

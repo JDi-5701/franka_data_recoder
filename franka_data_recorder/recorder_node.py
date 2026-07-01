@@ -350,6 +350,21 @@ class RecorderNode(Node):
         self.get_logger().info(resp.message)
         return resp
 
+    def close(self):
+        """Flush the dataset on shutdown. On lerobot v3.0 this calls finalize() to write the
+        trailing shard(s); skipping it can drop the last episodes. Drops an in-progress episode
+        first (Ctrl+C mid-recording -> that partial episode is not a valid demo)."""
+        if self._writer is None:
+            return
+        if self._recording:
+            self._recording = False
+            try:
+                self._writer.discard_episode()
+                self.get_logger().warn('shutdown mid-recording -> discarded in-progress episode')
+            except Exception as e:  # noqa
+                self.get_logger().warn(f'discard on shutdown failed: {e}')
+        self._writer.close()
+
     def _log_homing(self, what, future):
         try:
             res = future.result()
@@ -370,6 +385,7 @@ def main():
     except KeyboardInterrupt:
         pass
     finally:
+        node.close()               # v3.0: flush/finalize shards so recorded episodes persist
         node.destroy_node()
         rclpy.shutdown()
 
