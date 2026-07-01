@@ -14,6 +14,7 @@ Params:
   task        (str)  language instruction for the next episode (overrides config default)
 """
 import importlib
+import json
 import os
 from datetime import datetime
 
@@ -22,7 +23,8 @@ import yaml
 
 import rclpy
 from rclpy.node import Node
-from rclpy.qos import QoSProfile, ReliabilityPolicy, HistoryPolicy
+from rclpy.qos import QoSProfile, ReliabilityPolicy, HistoryPolicy, DurabilityPolicy
+from std_msgs.msg import String
 from std_srvs.srv import Trigger
 from ament_index_python.packages import get_package_share_directory
 
@@ -187,6 +189,13 @@ class RecorderNode(Node):
         self._recording = False
         self._n_frames = 0
         self._skipped = 0
+        self._episodes = 0                 # episodes saved in THIS run (for the GUI counter)
+
+        # Latched status so the GUI reads the ACTUAL dataset root + this run's episode count,
+        # instead of guessing the dir (it can't know the runtime timestamp / dataset_name).
+        latched = QoSProfile(depth=1, history=HistoryPolicy.KEEP_LAST,
+                             durability=DurabilityPolicy.TRANSIENT_LOCAL)
+        self._status_pub = self.create_publisher(String, '~/status', latched)
 
         self.create_service(Trigger, '~/start_recording', self._on_start)
         self.create_service(Trigger, '~/stop_recording', self._on_stop)
@@ -217,7 +226,14 @@ class RecorderNode(Node):
             self.create_service(Trigger, '~/go_pose', self._on_go_pose)
 
         self.create_timer(1.0 / self.fps, self._tick)
+        self._publish_status()
         self.get_logger().info(f'recorder ready @ {self.fps} Hz. call ~/start_recording to begin.')
+
+    def _publish_status(self):
+        """Latched status for the GUI: the real dataset root + this run's episode count."""
+        self._status_pub.publish(String(data=json.dumps({
+            'root': self._ds_cfg['root'], 'episodes': self._episodes,
+            'frames': self._n_frames, 'recording': self._recording})))
 
     # ---- frame sampling -------------------------------------------------
     def _build_frame(self):
@@ -273,6 +289,7 @@ class RecorderNode(Node):
             self.get_logger().error(resp.message)
             return resp
         self._recording, self._n_frames, self._skipped = True, 0, 0
+        self._publish_status()
         resp.success, resp.message = True, f'recording started (task="{self._task}")'
         self.get_logger().info(resp.message)
         return resp
@@ -288,7 +305,10 @@ class RecorderNode(Node):
             resp.success, resp.message = False, f'save failed: {e}'
             self.get_logger().error(resp.message)
             return resp
-        resp.success, resp.message = True, f'episode saved ({self._n_frames} frames)'
+        self._episodes += 1
+        self._publish_status()
+        resp.success, resp.message = True, \
+            f'episode saved ({self._n_frames} frames, {self._episodes} total this run)'
         self.get_logger().info(resp.message)
         return resp
 
@@ -296,6 +316,7 @@ class RecorderNode(Node):
         self._recording = False
         if self._writer is not None:
             self._writer.discard_episode()
+        self._publish_status()
         resp.success, resp.message = True, f'episode discarded ({self._n_frames} frames)'
         self.get_logger().info(resp.message)
         return resp
@@ -311,6 +332,7 @@ class RecorderNode(Node):
                 self._writer.discard_episode()
             except Exception as e:  # noqa
                 self.get_logger().warn(f'discard failed: {e}')
+        self._publish_status()
         self.get_logger().warn(
             f'homing during recording -> discarded in-progress episode ({self._n_frames} frames)')
         return True

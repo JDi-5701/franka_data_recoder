@@ -19,7 +19,6 @@ Dataset replay is intentionally NOT here -- use `lerobot-dataset-viz` to inspect
 
 Run (conda ros_ml): ros2 run franka_data_recorder gui   ->  http://localhost:8088
 """
-import glob
 import json
 import os
 import threading
@@ -32,6 +31,7 @@ import rclpy
 from rclpy.node import Node
 from rclpy.executors import MultiThreadedExecutor
 from rclpy.qos import QoSProfile, ReliabilityPolicy, HistoryPolicy, DurabilityPolicy
+from std_msgs.msg import String
 from std_srvs.srv import Trigger
 from ament_index_python.packages import get_package_share_directory
 
@@ -85,6 +85,10 @@ class GuiNode(Node):
                       'position_error': 0.0, 'orientation_error': 0.0}
         self._sub_control_state()
 
+        # recorder's latched ~/status -> the REAL dataset root + this run's episode count
+        self._rec_status = None
+        self._sub_recorder_status(ns)
+
         self._cli = {a: self.create_client(Trigger, f'{ns}/{srv}')
                      for a, srv in ACTIONS.items()}
         self.get_logger().info(
@@ -120,6 +124,17 @@ class GuiNode(Node):
         self._ctrl.update(available=True, state=msg.state,
                           position_error=msg.position_error,
                           orientation_error=msg.orientation_error)
+
+    def _sub_recorder_status(self, ns):
+        qos = QoSProfile(depth=1, history=HistoryPolicy.KEEP_LAST,
+                         durability=DurabilityPolicy.TRANSIENT_LOCAL)
+        self.create_subscription(String, f'{ns}/status', self._recorder_status_cb, qos)
+
+    def _recorder_status_cb(self, msg):
+        try:
+            self._rec_status = json.loads(msg.data)
+        except Exception:  # noqa
+            pass
 
     def _on_image(self, topic, msg):
         try:
@@ -164,23 +179,27 @@ class GuiNode(Node):
         return self._jpeg.get(topic)
 
     def dataset(self):
-        root = self._latest_dataset_dir()
-        info = {'root': root, 'exists': False, 'episodes': 0, 'frames': 0, 'fps': None}
+        # Authoritative source = the recorder's latched ~/status (real runtime root +
+        # THIS run's episode count). The GUI can't recompute the root itself: it doesn't
+        # know the runtime timestamp or the dataset_name passed to the recorder, so the old
+        # glob(config_root + '_*') + max() picked a stale PREVIOUS dataset (showing its
+        # total_episodes -- the "3 episodes already" bug).
+        st = self._rec_status
+        if not st or not st.get('root'):
+            return {'root': self.ds_root, 'exists': False, 'episodes': 0, 'frames': 0,
+                    'fps': None, 'recording': False}
+        root = st['root']
+        info = {'root': root, 'exists': os.path.exists(os.path.join(root, 'meta', 'info.json')),
+                'episodes': st.get('episodes', 0), 'frames': st.get('frames', 0),
+                'fps': None, 'recording': st.get('recording', False)}
         try:
             p = os.path.join(root, 'meta', 'info.json')
-            if os.path.exists(p):
+            if info['exists']:
                 with open(p) as f:
-                    j = json.load(f)
-                info.update(exists=True, episodes=j.get('total_episodes', 0),
-                            frames=j.get('total_frames', 0), fps=j.get('fps'))
+                    info['fps'] = json.load(f).get('fps')
         except Exception:  # noqa
             pass
         return info
-
-    def _latest_dataset_dir(self):
-        candidates = [d for d in glob.glob(self.ds_root + '_*')
-                      if os.path.exists(os.path.join(d, 'meta', 'info.json'))]
-        return max(candidates) if candidates else self.ds_root
 
 
 PAGE = r"""<!doctype html><html><head><meta charset="utf-8"><title>Franka Recorder</title>
