@@ -18,6 +18,9 @@
        so the recorder builds on the operator PC too. -->
   <exec_depend>franka_cartesian_impedance_msgs</exec_depend>
   <!-- optional, only when recording camera images: cv_bridge -->
+  <!-- camera bring-up (camera.launch.py): usb_cam driver + image_proc rectify_node -->
+  <exec_depend>usb_cam</exec_depend>
+  <exec_depend>image_proc</exec_depend>
   <!-- python deps not in rosdep: lerobot, numpy (pip install) -->
 
   <export>
