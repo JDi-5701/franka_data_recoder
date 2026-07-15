@@ -26,6 +26,9 @@ setup(
             'recorder = franka_data_recorder.recorder_node:main',
             'gui = franka_data_recorder.gui_node:main',
             'fake = franka_data_recorder.fake_publisher:main',
+            # --- PhysTwin recording add-on ---
+            'phystwin_recorder = franka_data_recorder.phystwin_recorder_node:main',
+            'phystwin_calibrate = franka_data_recorder.calibrate_phystwin:main',
         ],
     },
 )

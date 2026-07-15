@@ -1,0 +1,22 @@
+# PhysTwin recording config -- AUTO-DISCOVER mode.
+# No camera topics listed: the phystwin_recorder node scans the ROS graph and records EVERY
+# camera that publishes color + aligned_depth_to_color + camera_info. Plug in N cameras ->
+# record N cameras. Camera index = namespaces sorted alphabetically.
+#
+# Use this with launch/phystwin_all.launch.py (cameras + recorder) or run the recorder alone
+# after starting cameras yourself. To pin an explicit camera set instead, use
+# recorder_phystwin.yaml (static topics) which turns auto-discovery off.
+
+dataset:
+  format: phystwin
+  repo_id: phystwin_case
+  root: data/different_types       # PhysTwin base_path; each recording -> a case folder here
+  fps: 30
+  robot_type: franka_fr3
+
+task:
+  default: "articulated object free motion"
+
+# No `features:` cameras here on purpose -> auto-discovery fills them in at runtime.
+# (An empty features map is required by the base recorder's config schema.)
+features: {}

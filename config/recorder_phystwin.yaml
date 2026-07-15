@@ -1,0 +1,32 @@
+# PhysTwin recording config -- used by the `phystwin_recorder` entry point.
+# Reuses the SAME config schema as recorder.yaml (features -> topics -> extractor), but:
+#   * adds depth streams (extractor: depth_raw -> uint16 mm .npy, lossless)
+#   * color streams stay image_rgb, but the PhysTwin writer stores them as per-frame .png
+#   * no proprio/action features (PhysTwin doesn't use them; add them back if you also want
+#     to keep robot state alongside for later system identification)
+#
+# Camera topics below assume STANDARD RealSense namespacing (/camera_0, /camera_1, /camera_2).
+# EDIT the namespaces to match `ros2 topic list`. The recorder derives each camera's
+# camera_info topic automatically as <color-topic-dir>/camera_info.
+
+dataset:
+  format: phystwin                 # informational; the entry point selects the writer
+  repo_id: phystwin_case
+  root: data/different_types       # PhysTwin base_path; each recording -> a case folder here
+  fps: 30
+  robot_type: franka_fr3
+
+task:
+  default: "articulated object free motion"
+
+features:
+  # --- RGB (one per camera). PhysTwin writer -> color/{i}/{frame}.png -------------
+  observation.images.0: {topic: /camera_0/color/image_raw, type: Image, extractor: image_rgb, shape: [480, 848, 3]}
+  observation.images.1: {topic: /camera_1/color/image_raw, type: Image, extractor: image_rgb, shape: [480, 848, 3]}
+  observation.images.2: {topic: /camera_2/color/image_raw, type: Image, extractor: image_rgb, shape: [480, 848, 3]}
+
+  # --- Depth (one per camera). PhysTwin writer -> depth/{i}/{frame}.npy (uint16 mm) -
+  # Use aligned_depth_to_color so depth is pixel-aligned to color at the same resolution.
+  observation.depth.0: {topic: /camera_0/aligned_depth_to_color/image_raw, type: Image, extractor: depth_raw, shape: [480, 848]}
+  observation.depth.1: {topic: /camera_1/aligned_depth_to_color/image_raw, type: Image, extractor: depth_raw, shape: [480, 848]}
+  observation.depth.2: {topic: /camera_2/aligned_depth_to_color/image_raw, type: Image, extractor: depth_raw, shape: [480, 848]}
